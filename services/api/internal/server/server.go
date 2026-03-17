@@ -45,8 +45,17 @@ func New(cfg *config.Config, db *database.DB, log *zap.Logger) http.Handler {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// Static assets — embed script (hound.js) and compiled Link widget
+	// Served from ./static/ on disk (populated by the Docker build stage).
+	staticFS := http.FileServer(http.Dir("./static"))
+	r.Get("/static/*", func(w http.ResponseWriter, r *http.Request) {
+		// Strip the /static prefix before delegating to the file server
+		http.StripPrefix("/static", staticFS).ServeHTTP(w, r)
+	})
+
 	// Public browser-facing pages (no auth)
 	r.Get("/demo", h.Demo)
+	r.Get("/link/widget", h.LinkWidget)
 	r.Get("/link/oauth/complete", h.OAuthComplete)
 
 	// /link/ — browser-facing routes authenticated by link_token (called from Link widget)

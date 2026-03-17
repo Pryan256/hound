@@ -2,12 +2,32 @@ package handlers
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 )
+
+// LinkWidget serves the hosted Hound Link React app (popup window).
+// Route: GET /link/widget?link_token=...
+// The React app reads link_token from the URL and handles the full flow.
+func (h *Handler) LinkWidget(w http.ResponseWriter, r *http.Request) {
+	// Try to serve the built React app first; fall back to inline HTML for dev.
+	indexPath := filepath.Join("static", "link", "index.html")
+	if _, err := os.Stat(indexPath); err == nil {
+		http.ServeFile(w, r, indexPath)
+		return
+	}
+
+	// Dev fallback: inline page that loads the Vite dev server script
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(linkWidgetDevPage))
+}
 
 // OAuthComplete serves the redirect landing page after Akoya OAuth.
 // Akoya redirects here with ?code=...&state=...
-// This page reads the link_token from sessionStorage, calls /link/oauth/callback,
-// stores the public_token, and redirects back to /demo.
+//
+// In popup mode (window.opener exists) the page postMessages the result to
+// its opener (the widget popup) then closes itself.  In legacy redirect mode
+// it still works as before.
 func (h *Handler) OAuthComplete(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(oauthCompletePage))
@@ -19,6 +39,39 @@ func (h *Handler) Demo(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(demoPage))
 }
 
+// ── linkWidgetDevPage ─────────────────────────────────────────────────────────
+// Shown when the built React assets haven't been compiled yet (local dev).
+const linkWidgetDevPage = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connect your bank — Hound</title>
+  <meta name="robots" content="noindex">
+  <style>
+    body { font-family: -apple-system, sans-serif; display: flex; align-items: center;
+           justify-content: center; min-height: 100vh; margin: 0; background: #f8f7f4; }
+    .card { background: white; border-radius: 16px; padding: 48px 40px; max-width: 420px;
+            width: 90%; text-align: center; box-shadow: 0 4px 40px rgba(0,0,0,0.12); }
+    .icon { font-size: 40px; margin-bottom: 16px; }
+    h2 { color: #2D2800; margin: 0 0 10px; font-size: 20px; font-weight: 700; }
+    p  { color: #6b7280; margin: 0; font-size: 14px; line-height: 1.6; }
+    code { background: #f3f4f6; border-radius: 4px; padding: 2px 6px;
+           font-size: 12px; font-family: monospace; color: #374151; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">🔗</div>
+  <h2>Link widget not built yet</h2>
+  <p>Run <code>npm run build:hosted</code> inside <code>packages/link</code> to compile the React app,
+     or start the Vite dev server and proxy requests through it.</p>
+</div>
+</body>
+</html>`
+
+// ── oauthCompletePage ─────────────────────────────────────────────────────────
+// Handles both popup mode (postMessage → close) and legacy redirect mode.
 const oauthCompletePage = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -30,7 +83,7 @@ const oauthCompletePage = `<!DOCTYPE html>
     .card { background: white; border-radius: 12px; padding: 40px; max-width: 420px;
             width: 100%; text-align: center; box-shadow: 0 2px 20px rgba(0,0,0,0.08); }
     .spinner { width: 40px; height: 40px; border: 3px solid #e5e7eb;
-               border-top-color: #3b3000; border-radius: 50%; animation: spin 0.8s linear infinite;
+               border-top-color: #2D2800; border-radius: 50%; animation: spin 0.8s linear infinite;
                margin: 0 auto 20px; }
     @keyframes spin { to { transform: rotate(360deg); } }
     h2 { color: #1a1a1a; margin: 0 0 8px; font-size: 20px; }
@@ -46,52 +99,90 @@ const oauthCompletePage = `<!DOCTYPE html>
 </div>
 <script>
 (async () => {
-  const params = new URLSearchParams(window.location.search);
-  const code  = params.get('code');
-  const state = params.get('state');
-  const linkToken = sessionStorage.getItem('hound_link_token');
-
-  // Show Akoya error if present
+  const params    = new URLSearchParams(window.location.search);
+  const code      = params.get('code');
+  const state     = params.get('state');
   const akoyaError = params.get('error');
   const akoyaDesc  = params.get('error_description');
+
+  // ── Helper: postMessage to widget popup (our opener) then close ──────────
+  // The widget popup is window.opener when Akoya redirects back here directly.
+  // The developer's page is window.opener.opener.
+  function notifyOpenerSuccess(publicToken) {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({ type: 'hound:success', publicToken: publicToken, metadata: {} }, '*');
+    }
+    setTimeout(function() { window.close(); }, 150);
+  }
+
+  function notifyOpenerError(errCode, errMsg) {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({
+        type: 'hound:error',
+        error: { errorCode: errCode, errorMessage: errMsg, errorType: 'OAUTH_ERROR' }
+      }, '*');
+    }
+    setTimeout(function() { window.close(); }, 150);
+  }
+
+  // ── Show Akoya-level error ───────────────────────────────────────────────
   if (akoyaError) {
     document.getElementById('spinner').style.display = 'none';
     document.getElementById('title').textContent = 'Authorization failed';
-    document.getElementById('msg').innerHTML = '<strong>' + akoyaError + '</strong>: ' + (akoyaDesc || '') +
-      '<br><br><small>URL params: ' + window.location.search + '</small>';
+    document.getElementById('msg').textContent = akoyaDesc || akoyaError;
     document.getElementById('msg').className = 'error';
+    notifyOpenerError(akoyaError, akoyaDesc || 'Authorization was declined.');
     return;
   }
 
-  if (!code || !state || !linkToken) {
+  if (!code || !state) {
     document.getElementById('spinner').style.display = 'none';
     document.getElementById('title').textContent = 'Something went wrong';
-    document.getElementById('msg').innerHTML = 'Missing code, state, or link token.<br><small>URL: ' +
-      window.location.search + '<br>linkToken in storage: ' + (linkToken ? 'yes' : 'NO') + '</small>';
+    document.getElementById('msg').textContent = 'Missing authorization code or state parameter.';
     document.getElementById('msg').className = 'error';
+    notifyOpenerError('MISSING_PARAMS', 'Missing code or state.');
+    return;
+  }
+
+  // Retrieve the link token — prefer sessionStorage (set by the widget before
+  // initiating OAuth), then fall back to URL param for legacy flows.
+  const linkToken = sessionStorage.getItem('hound_link_token') || params.get('link_token') || '';
+
+  if (!linkToken) {
+    document.getElementById('spinner').style.display = 'none';
+    document.getElementById('title').textContent = 'Session expired';
+    document.getElementById('msg').textContent = 'Could not find the link session. Please start over.';
+    document.getElementById('msg').className = 'error';
+    notifyOpenerError('SESSION_EXPIRED', 'Link token not found in session storage.');
     return;
   }
 
   try {
-    const res = await fetch('/link/oauth/callback?link_token=' + encodeURIComponent(linkToken), {
-      method: 'POST',
+    const res  = await fetch('/link/oauth/callback?link_token=' + encodeURIComponent(linkToken), {
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, state }),
+      body:    JSON.stringify({ code, state }),
     });
-
     const data = await res.json();
 
     if (!res.ok) {
       throw new Error(data.error_message || 'Callback failed');
     }
 
-    sessionStorage.setItem('hound_public_token', data.public_token);
-    window.location.href = '/demo?step=exchange';
+    if (window.opener && !window.opener.closed) {
+      // Popup mode: postMessage success to widget opener, then close
+      notifyOpenerSuccess(data.public_token);
+    } else {
+      // Legacy redirect mode: store in sessionStorage and navigate back to demo
+      sessionStorage.setItem('hound_public_token', data.public_token);
+      window.location.href = '/demo?step=exchange';
+    }
   } catch (err) {
     document.getElementById('spinner').style.display = 'none';
     document.getElementById('title').textContent = 'Connection failed';
     document.getElementById('msg').textContent = err.message;
     document.getElementById('msg').className = 'error';
+    notifyOpenerError('CALLBACK_ERROR', err.message);
   }
 })();
 </script>
@@ -182,15 +273,24 @@ const demoPage = `<!DOCTYPE html>
     .txn-amt.credit { color: #10b981; }
 
     .success-icon { color: #10b981; font-size: 16px; margin-left: 8px; }
+
+    /* Hound Link button */
+    .hound-connect-btn {
+      background: #2D2800; color: white; border: none; border-radius: 10px;
+      padding: 12px 24px; font-size: 15px; font-weight: 600; cursor: pointer;
+      transition: opacity 0.15s; margin-top: 8px; display: inline-flex;
+      align-items: center; gap: 8px;
+    }
+    .hound-connect-btn:hover { opacity: 0.87; }
   </style>
 </head>
 <body>
 
 <header>
   <svg width="20" height="20" viewBox="0 0 100 100" fill="none">
-    <circle cx="50" cy="50" r="48" stroke="#3b3000" stroke-width="6"/>
-    <circle cx="50" cy="42" r="16" fill="#3b3000"/>
-    <path d="M20 80 Q50 55 80 80" stroke="#3b3000" stroke-width="6" fill="none"/>
+    <circle cx="50" cy="50" r="46" fill="#2D2800"/>
+    <circle cx="50" cy="40" r="14" fill="white"/>
+    <path d="M22 76 Q50 52 78 76" stroke="white" stroke-width="6" fill="none" stroke-linecap="round"/>
   </svg>
   <h1>Hound.</h1>
   <span class="badge">Developer Demo</span>
@@ -199,7 +299,7 @@ const demoPage = `<!DOCTYPE html>
 <main>
   <div class="intro">
     <h2>Connect a bank account</h2>
-    <p>Walk through the full Hound Link flow: create a link token, authenticate with your bank via OAuth, and fetch live account data.</p>
+    <p>Walk through the full Hound Link flow: create a link token, open the Link widget, and fetch live account data.</p>
   </div>
 
   <!-- Step 1: API Key -->
@@ -217,36 +317,25 @@ const demoPage = `<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Step 2: Select Institution -->
+  <!-- Step 2: Open Link Widget -->
   <div class="step" id="step2">
     <div class="step-header">
       <div class="step-num">2</div>
-      <div class="step-title">Select a bank</div>
+      <div class="step-title">Open Hound Link</div>
     </div>
     <div class="step-body">
       <p class="note" style="margin-bottom:12px;">
-        In the Akoya sandbox, use <strong>mikomo</strong> — it's Akoya's test institution.
-        In production, your users will see all major US banks.
+        Click the button below to open the Hound Link widget in a popup.
+        In the sandbox, use <strong>Mikomo Bank</strong> — it's Akoya's test institution.
       </p>
-      <div class="inst-grid" id="instGrid">
-        <div class="inst-card selected" onclick="selectInst(this,'mikomo')" data-id="mikomo">
-          <div class="inst-logo" style="background:#6366f1;display:flex;align-items:center;justify-content:center;color:white;font-size:10px;font-weight:700;">MK</div>
-          <div><div class="inst-name">Mikomo Bank</div><div class="account-meta">Akoya Sandbox</div></div>
-        </div>
-        <div class="inst-card" onclick="selectInst(this,'chase')" data-id="chase">
-          <img class="inst-logo" src="https://logo.clearbit.com/chase.com" onerror="this.style.display='none'"/>
-          <div><div class="inst-name">Chase</div><div class="account-meta">Production only</div></div>
-        </div>
-        <div class="inst-card" onclick="selectInst(this,'bofa')" data-id="bofa">
-          <img class="inst-logo" src="https://logo.clearbit.com/bankofamerica.com" onerror="this.style.display='none'"/>
-          <div><div class="inst-name">Bank of America</div><div class="account-meta">Production only</div></div>
-        </div>
-        <div class="inst-card" onclick="selectInst(this,'capitalonebank')" data-id="capitalonebank">
-          <img class="inst-logo" src="https://logo.clearbit.com/capitalone.com" onerror="this.style.display='none'"/>
-          <div><div class="inst-name">Capital One</div><div class="account-meta">Production only</div></div>
-        </div>
-      </div>
-      <button onclick="initiateOAuth()" id="connectBtn">Connect with Akoya →</button>
+      <button class="hound-connect-btn" id="openLinkBtn" onclick="openLink()" disabled>
+        <svg width="16" height="16" viewBox="0 0 100 100" fill="none">
+          <circle cx="50" cy="50" r="46" fill="white"/>
+          <circle cx="50" cy="40" r="14" fill="#2D2800"/>
+          <path d="M22 76 Q50 52 78 76" stroke="#2D2800" stroke-width="8" fill="none" stroke-linecap="round"/>
+        </svg>
+        Connect your bank
+      </button>
       <div id="result2"></div>
     </div>
   </div>
@@ -283,32 +372,28 @@ const demoPage = `<!DOCTYPE html>
 
 </main>
 
+<script src="/static/hound.js"></script>
 <script>
-let linkToken = '';
+let linkToken   = '';
 let accessToken = '';
-let selectedInst = 'mikomo';
+let houndHandler = null;
+
 const API_KEY_HEADER = () => document.getElementById('apiKey').value.trim();
 
 function setStep(n) {
   for (let i = 1; i <= 4; i++) {
     const el = document.getElementById('step' + i);
-    if (i < n)  { el.className = 'step done'; }
-    else if (i === n) { el.className = 'step active'; }
-    else        { el.className = 'step'; }
+    if      (i < n)  el.className = 'step done';
+    else if (i === n) el.className = 'step active';
+    else             el.className = 'step';
   }
 }
 
 function showResult(id, data, isError) {
   const el = document.getElementById(id);
   el.innerHTML = '<div class="result"><div class="result-label">' +
-    (isError ? '⚠ Error' : '✓ Response') + '</div><pre>' +
+    (isError ? '&#9888; Error' : '&#10003; Response') + '</div><pre>' +
     JSON.stringify(data, null, 2) + '</pre></div>';
-}
-
-function selectInst(card, id) {
-  document.querySelectorAll('.inst-card').forEach(c => c.classList.remove('selected'));
-  card.classList.add('selected');
-  selectedInst = id;
 }
 
 async function createLinkToken() {
@@ -316,34 +401,45 @@ async function createLinkToken() {
   if (!key) { alert('Enter an API key'); return; }
   try {
     const res = await fetch('/v1/link/token/create', {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: 'demo-user-001', products: ['transactions','identity'], country_codes: ['US'] }),
+      body:    JSON.stringify({ user_id: 'demo-user-001', products: ['transactions','identity'], country_codes: ['US'] }),
     });
     const data = await res.json();
     if (!res.ok) { showResult('result1', data, true); return; }
+
     linkToken = data.link_token;
     sessionStorage.setItem('hound_link_token', linkToken);
     sessionStorage.setItem('hound_api_key', key);
     showResult('result1', data, false);
     setStep(2);
+
+    // Enable the Link button
+    document.getElementById('openLinkBtn').disabled = false;
+
+    // Create the Hound Link handler
+    houndHandler = Hound.create({
+      token: linkToken,
+      onSuccess: function(publicToken, metadata) {
+        document.getElementById('publicTokenInput').value = publicToken;
+        sessionStorage.setItem('hound_public_token', publicToken);
+        showResult('result2', { status: 'success', public_token: publicToken, metadata: metadata }, false);
+        setStep(3);
+      },
+      onExit: function(err, metadata) {
+        if (err) {
+          showResult('result2', { error: err, metadata: metadata }, true);
+        } else {
+          showResult('result2', { status: 'exited', metadata: metadata }, false);
+        }
+      },
+    });
   } catch(e) { showResult('result1', { error: e.message }, true); }
 }
 
-async function initiateOAuth() {
-  if (!linkToken) { alert('Create a link token first'); return; }
-  try {
-    const res = await fetch('/link/oauth/initiate?link_token=' + encodeURIComponent(linkToken), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ institution_id: selectedInst }),
-    });
-    const data = await res.json();
-    if (!res.ok) { showResult('result2', data, true); return; }
-    showResult('result2', { oauth_url: data.oauth_url }, false);
-    // Full-page redirect — Akoya will redirect back to /link/oauth/complete
-    setTimeout(() => { window.location.href = data.oauth_url; }, 800);
-  } catch(e) { showResult('result2', { error: e.message }, true); }
+function openLink() {
+  if (!houndHandler) { alert('Create a link token first'); return; }
+  houndHandler.open();
 }
 
 async function exchangeToken() {
@@ -352,9 +448,9 @@ async function exchangeToken() {
   if (!publicToken) { alert('No public token'); return; }
   try {
     const res = await fetch('/v1/item/public_token/exchange', {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ public_token: publicToken }),
+      body:    JSON.stringify({ public_token: publicToken }),
     });
     const data = await res.json();
     if (!res.ok) { showResult('result3', data, true); return; }
@@ -388,13 +484,13 @@ async function fetchTransactions() {
   } catch(e) { showResult('result5', { error: e.message }, true); }
 }
 
-// On page load: check if returning from OAuth
+// On page load: check if returning from legacy OAuth redirect (non-popup mode)
 window.addEventListener('DOMContentLoaded', () => {
   const params = new URLSearchParams(window.location.search);
   if (params.get('step') === 'exchange') {
     const publicToken = sessionStorage.getItem('hound_public_token');
-    const apiKey = sessionStorage.getItem('hound_api_key');
-    linkToken = sessionStorage.getItem('hound_link_token') || '';
+    const apiKey      = sessionStorage.getItem('hound_api_key');
+    linkToken         = sessionStorage.getItem('hound_link_token') || '';
     if (publicToken) {
       if (apiKey) document.getElementById('apiKey').value = apiKey;
       document.getElementById('publicTokenInput').value = publicToken;

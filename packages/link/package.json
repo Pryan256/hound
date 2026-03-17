@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:hosted": "vite build --config vite.hosted.config.ts",
     "lint": "eslint src --ext ts,tsx",
     "preview": "vite preview"
   },
