@@ -23,16 +23,19 @@ func (h *Handler) GetTransactions(w http.ResponseWriter, r *http.Request) {
 	// Parse query params
 	q := r.URL.Query()
 
-	startDate, err := time.Parse("2006-01-02", q.Get("start_date"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_FIELD", "start_date must be YYYY-MM-DD")
-		return
-	}
+	// Default: last 7 years. Wide enough to cover sandbox data (e.g. Mikomo: 2019-2020).
+	startDate := time.Now().UTC().AddDate(-7, 0, 0)
+	endDate := time.Now().UTC()
 
-	endDate, err := time.Parse("2006-01-02", q.Get("end_date"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_FIELD", "end_date must be YYYY-MM-DD")
-		return
+	if s := q.Get("start_date"); s != "" {
+		if t, err := time.Parse("2006-01-02", s); err == nil {
+			startDate = t
+		}
+	}
+	if e := q.Get("end_date"); e != "" {
+		if t, err := time.Parse("2006-01-02", e); err == nil {
+			endDate = t
+		}
 	}
 
 	count := 100

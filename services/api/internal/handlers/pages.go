@@ -380,7 +380,7 @@ async function fetchAccounts() {
 async function fetchTransactions() {
   const key = sessionStorage.getItem('hound_api_key') || API_KEY_HEADER();
   try {
-    const res = await fetch('/v1/transactions?start_date=2026-01-01&end_date=2026-03-17', {
+    const res = await fetch('/v1/transactions?start_date=2019-01-01&end_date=2021-12-31', {
       headers: { 'Authorization': 'Bearer ' + key, 'Hound-Access-Token': accessToken },
     });
     const data = await res.json();

@@ -96,7 +96,7 @@ func (c *Client) GetTransactions(ctx context.Context, item *models.Item, start, 
 
 		data, err := c.get(ctx, item, path)
 		if err != nil {
-			// Log and skip — one account failing shouldn't block the rest
+			// One account failing shouldn't block the rest
 			continue
 		}
 
@@ -104,6 +104,7 @@ func (c *Client) GetTransactions(ctx context.Context, item *models.Item, start, 
 			Transactions []fdxTransaction `json:"transactions"`
 		}
 		if err := json.Unmarshal(data, &resp); err != nil {
+			fmt.Printf("AKOYA TXN PARSE ERROR account=%s: %v\n", acct.ProviderAccountID, err)
 			continue
 		}
 		for _, t := range resp.Transactions {
@@ -248,69 +249,143 @@ func (c *Client) get(ctx context.Context, item *models.Item, path string) ([]byt
 }
 
 // --- FDX response types (Akoya follows FDX standard) ---
+//
+// Akoya wraps each account in a type-specific key (FDX polymorphic pattern):
+//   {"depositAccount": {...}} or {"investmentAccount": {...}} etc.
+// We try each known key and use whichever is populated.
 
+type fdxCurrency struct {
+	CurrencyCode string `json:"currencyCode"`
+}
+
+type fdxAccountDetails struct {
+	AccountID    string      `json:"accountId"`
+	Nickname     string      `json:"nickname"`
+	DisplayName  string      `json:"displayName"`
+	AccountType  string      `json:"accountType"`
+	LastFour     string      `json:"lastFourAccountDigits"`
+	Balance      float64     `json:"currentBalance"`
+	AvailBalance *float64    `json:"availableBalance"`
+	Currency     fdxCurrency `json:"currency"`
+}
+
+// fdxAccount is the wrapper — one of the typed keys will be non-nil.
 type fdxAccount struct {
-	AccountID    string  `json:"accountId"`
-	DisplayName  string  `json:"displayName"`
-	AccountType  string  `json:"accountType"`
-	AccountSubType string `json:"accountSubType"`
-	LastFour     string  `json:"lastFourAccountDigits"`
-	Balance      float64 `json:"currentBalance"`
-	AvailBalance *float64 `json:"availableBalance"`
-	Currency     string  `json:"currency"`
+	Deposit    *fdxAccountDetails `json:"depositAccount"`
+	Investment *fdxAccountDetails `json:"investmentAccount"`
+	Loan       *fdxAccountDetails `json:"loanAccount"`
+	Credit     *fdxAccountDetails `json:"lineOfCreditAccount"`
+	Insurance  *fdxAccountDetails `json:"insuranceAccount"`
+}
+
+// resolve returns the inner account details and the account category.
+func (a fdxAccount) resolve() (*fdxAccountDetails, string) {
+	if a.Deposit != nil {
+		return a.Deposit, "depository"
+	}
+	if a.Investment != nil {
+		return a.Investment, "investment"
+	}
+	if a.Loan != nil {
+		return a.Loan, "loan"
+	}
+	if a.Credit != nil {
+		return a.Credit, "credit"
+	}
+	if a.Insurance != nil {
+		return a.Insurance, "other"
+	}
+	return nil, "other"
 }
 
 func (a fdxAccount) toModel(item *models.Item) models.Account {
+	details, accountType := a.resolve()
+	if details == nil {
+		return models.Account{ItemID: item.ID, Type: "other"}
+	}
+	name := details.Nickname
+	if name == "" {
+		name = details.DisplayName
+	}
 	return models.Account{
 		ItemID:            item.ID,
-		ProviderAccountID: a.AccountID,
-		Name:              a.DisplayName,
-		OfficialName:      a.DisplayName,
-		Type:         models.AccountType(normalizeAccountType(a.AccountType)),
-		Subtype:      a.AccountSubType,
-		Mask:         a.LastFour,
+		ProviderAccountID: details.AccountID,
+		Name:              name,
+		OfficialName:      name,
+		Type:              models.AccountType(accountType),
+		Mask:              details.LastFour,
 		Balances: models.Balances{
-			Current:   a.Balance,
-			Available: a.AvailBalance,
-			Currency:  a.Currency,
+			Current:   details.Balance,
+			Available: details.AvailBalance,
+			Currency:  details.Currency.CurrencyCode,
 		},
 	}
 }
 
+// fdxTransactionDetails is the inner transaction payload (same fields across all types).
+type fdxTransactionDetails struct {
+	TransactionID string  `json:"transactionId"`
+	Amount        float64 `json:"amount"`
+	Description   string  `json:"description"`
+	// Akoya uses full ISO 8601 timestamps
+	PostedTimestamp      string `json:"postedTimestamp"`
+	TransactionTimestamp string `json:"transactionTimestamp"`
+	// Investment-specific fields (ignored for non-investment accounts)
+	Symbol       string  `json:"symbol"`
+	SecurityType string  `json:"securityType"`
+	Category     string  `json:"category"`
+	SubCategory  string  `json:"subCategory"`
+	// Deposit-specific
+	Status string `json:"status"` // "PENDING" or "POSTED"
+}
+
+// fdxTransaction wraps the polymorphic FDX transaction type.
 type fdxTransaction struct {
-	TransactionID   string   `json:"transactionId"`
-	Amount          float64  `json:"amount"`
-	Currency        string   `json:"currency"`
-	PostedDate      string   `json:"postedDate"`
-	TransactionDate string   `json:"transactionDate"`
-	Description     string   `json:"description"`
-	Pending         bool     `json:"status"` // FDX uses "PENDING" string
-	Category        []string `json:"category"`
+	Investment *fdxTransactionDetails `json:"investmentTransaction"`
+	Deposit    *fdxTransactionDetails `json:"depositTransaction"`
+	Loan       *fdxTransactionDetails `json:"loanTransaction"`
+	Insurance  *fdxTransactionDetails `json:"insuranceTransaction"`
+}
+
+func (t fdxTransaction) resolve() *fdxTransactionDetails {
+	if t.Investment != nil {
+		return t.Investment
+	}
+	if t.Deposit != nil {
+		return t.Deposit
+	}
+	if t.Loan != nil {
+		return t.Loan
+	}
+	if t.Insurance != nil {
+		return t.Insurance
+	}
+	return nil
 }
 
 func (t fdxTransaction) toModel() models.Transaction {
-	date, _ := time.Parse("2006-01-02", t.PostedDate)
+	d := t.resolve()
+	if d == nil {
+		return models.Transaction{}
+	}
+	// Try postedTimestamp first, fall back to transactionTimestamp
+	ts := d.PostedTimestamp
+	if ts == "" {
+		ts = d.TransactionTimestamp
+	}
+	date, _ := time.Parse(time.RFC3339, ts)
+
+	categories := []string{}
+	if d.Category != "" {
+		categories = append(categories, d.Category)
+	}
+
 	return models.Transaction{
-		Amount:   t.Amount,
-		Currency: t.Currency,
+		Amount:   d.Amount,
 		Date:     date,
-		Name:     t.Description,
-		Pending:  t.Pending,
-		Category: t.Category,
+		Name:     d.Description,
+		Pending:  d.Status == "PENDING",
+		Category: categories,
 	}
 }
 
-func normalizeAccountType(fdxType string) string {
-	switch fdxType {
-	case "CHECKING", "SAVINGS", "MONEY_MARKET", "CD":
-		return "depository"
-	case "CREDIT_CARD", "LINE_OF_CREDIT":
-		return "credit"
-	case "INVESTMENT", "BROKERAGE":
-		return "investment"
-	case "LOAN", "MORTGAGE":
-		return "loan"
-	default:
-		return "other"
-	}
-}
