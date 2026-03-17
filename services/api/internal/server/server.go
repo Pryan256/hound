@@ -1,0 +1,83 @@
+package server
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+	"github.com/hound-fi/api/internal/aggregator"
+	"github.com/hound-fi/api/internal/aggregator/akoya"
+	"github.com/hound-fi/api/internal/aggregator/finicity"
+	"github.com/hound-fi/api/internal/config"
+	"github.com/hound-fi/api/internal/database"
+	"github.com/hound-fi/api/internal/handlers"
+	"github.com/hound-fi/api/internal/middleware"
+	"go.uber.org/zap"
+)
+
+func New(cfg *config.Config, db *database.DB, log *zap.Logger) http.Handler {
+	r := chi.NewRouter()
+
+	// Global middleware
+	r.Use(chimiddleware.RequestID)
+	r.Use(chimiddleware.RealIP)
+	r.Use(middleware.Logger(log))
+	r.Use(chimiddleware.Recoverer)
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins: []string{"https://*", "http://localhost:*"},
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Authorization", "Content-Type", "Hound-Client-ID", "Hound-Access-Token"},
+		MaxAge:         300,
+	}))
+
+	// Build aggregator router
+	akoyaClient := akoya.New(cfg.Akoya)
+	finicityClient := finicity.New(cfg.Finicity)
+	aggRouter := aggregator.NewRouterWithLogger(log, akoyaClient, finicityClient)
+
+	// Handlers
+	h := handlers.New(db, aggRouter, log, cfg)
+
+	// Health check (no auth)
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	// /link/ — browser-facing routes authenticated by link_token (called from Link widget)
+	r.Route("/link", func(r chi.Router) {
+		r.Use(middleware.LinkTokenAuth(db, log))
+
+		// Institution search (called as user types in Link widget)
+		r.Get("/institutions/search", h.SearchInstitutions)
+		r.Get("/institutions", h.GetInstitution)
+
+		// OAuth flow
+		r.Post("/oauth/initiate", h.OAuthInitiate)
+		r.Post("/oauth/callback", h.OAuthCallback)
+	})
+
+	// v1 API — all routes require API key auth (server-side only)
+	r.Route("/v1", func(r chi.Router) {
+		r.Use(middleware.APIKeyAuth(db, log))
+
+		// Link token (initiates a Link session)
+		r.Post("/link/token/create", h.CreateLinkToken)
+
+		// Exchange public token for access token after Link completes
+		r.Post("/item/public_token/exchange", h.ExchangePublicToken)
+
+		// Item management
+		r.Get("/item", h.GetItem)
+		r.Delete("/item", h.DeleteItem)
+
+		// Financial data
+		r.Get("/accounts", h.GetAccounts)
+		r.Get("/accounts/balance", h.GetAccountBalance)
+		r.Get("/transactions", h.GetTransactions)
+		r.Get("/identity", h.GetIdentity)
+	})
+
+	return r
+}

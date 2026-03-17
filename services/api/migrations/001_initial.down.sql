@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS webhooks;
+DROP TABLE IF EXISTS transactions;
+DROP TABLE IF EXISTS accounts;
+DROP TABLE IF EXISTS access_tokens;
+DROP TABLE IF EXISTS link_sessions;
+DROP TABLE IF EXISTS items;
+DROP TABLE IF EXISTS link_tokens;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS applications;
