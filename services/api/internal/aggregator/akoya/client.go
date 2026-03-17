@@ -23,6 +23,7 @@ const providerName = "akoya"
 // akoyaInstitutions is the set of FIs available via Akoya.
 // In production this should be fetched dynamically from Akoya's institution list API.
 var akoyaInstitutions = map[string]bool{
+	"mikomo":         true, // Akoya sandbox test institution
 	"chase":          true,
 	"bofa":           true,
 	"wellsfargo":     true,
@@ -54,8 +55,8 @@ func (c *Client) Supports(_ context.Context, institutionID string) bool {
 }
 
 func (c *Client) GetAccounts(ctx context.Context, item *models.Item) ([]models.Account, error) {
-	// Akoya FDX endpoint: GET /accounts
-	data, err := c.get(ctx, item, "/accounts")
+	// Akoya endpoint: GET /accounts-info/v2/{connector_id}
+	data, err := c.get(ctx, item, "/accounts-info/v2/"+item.InstitutionID)
 	if err != nil {
 		return nil, fmt.Errorf("akoya get accounts: %w", err)
 	}
@@ -80,30 +81,41 @@ func (c *Client) GetAccountBalances(ctx context.Context, item *models.Item) ([]m
 }
 
 func (c *Client) GetTransactions(ctx context.Context, item *models.Item, start, end time.Time, count, offset int) (*models.TransactionsResponse, error) {
-	path := fmt.Sprintf("/accounts/transactions?startTime=%s&endTime=%s&limit=%d&offset=%d",
-		start.Format(time.RFC3339), end.Format(time.RFC3339), count, offset)
-
-	data, err := c.get(ctx, item, path)
+	// Akoya transactions are per-account: GET /transactions/v2/{connector_id}/{accountId}
+	// Fetch accounts first to get account IDs, then get transactions per account.
+	accounts, err := c.GetAccounts(ctx, item)
 	if err != nil {
-		return nil, fmt.Errorf("akoya get transactions: %w", err)
+		return nil, fmt.Errorf("akoya get accounts for transactions: %w", err)
 	}
 
-	var resp struct {
-		Transactions []fdxTransaction `json:"transactions"`
-		TotalCount   int              `json:"totalElements"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("akoya parse transactions: %w", err)
-	}
+	var allTxns []models.Transaction
+	for _, acct := range accounts {
+		path := fmt.Sprintf("/transactions/v2/%s/%s?startTime=%s&endTime=%s&limit=%d&offset=%d",
+			item.InstitutionID, acct.ProviderAccountID,
+			start.Format(time.RFC3339), end.Format(time.RFC3339), count, offset)
 
-	txns := make([]models.Transaction, len(resp.Transactions))
-	for i, t := range resp.Transactions {
-		txns[i] = t.toModel()
+		data, err := c.get(ctx, item, path)
+		if err != nil {
+			// Log and skip — one account failing shouldn't block the rest
+			continue
+		}
+
+		var resp struct {
+			Transactions []fdxTransaction `json:"transactions"`
+		}
+		if err := json.Unmarshal(data, &resp); err != nil {
+			continue
+		}
+		for _, t := range resp.Transactions {
+			txns := t.toModel()
+			txns.AccountID = acct.ID
+			allTxns = append(allTxns, txns)
+		}
 	}
 
 	return &models.TransactionsResponse{
-		Transactions: txns,
-		TotalCount:   resp.TotalCount,
+		Transactions: allTxns,
+		TotalCount:   len(allTxns),
 	}, nil
 }
 
@@ -113,31 +125,30 @@ func (c *Client) GetIdentity(ctx context.Context, item *models.Item) ([]models.A
 }
 
 // GetAuthorizationURL builds the Akoya OAuth2 authorization URL.
-// Akoya uses the connector_id parameter to identify the institution.
-// Docs: https://docs.akoya.com/docs/authorization-code-flow
+// Docs: https://docs.akoya.com/reference/get-authorization-code
 func (c *Client) GetAuthorizationURL(institutionID, state, redirectURI string) (string, error) {
-	// Akoya IDP base differs from data API base
-	idpBase := c.cfg.BaseURL // e.g. "https://sandbox-idp.ddp.akoya.com"
-
+	// Akoya uses a flat /auth endpoint with connector as a query param (not Keycloak realm routing)
+	// e.g. https://sandbox-idp.ddp.akoya.com/auth?connector=mikomo&...
 	params := url.Values{}
+	params.Set("connector", institutionID) // Akoya param name is "connector", not "connector_id"
 	params.Set("response_type", "code")
 	params.Set("client_id", c.cfg.ClientID)
 	params.Set("redirect_uri", redirectURI)
-	params.Set("scope", "openid profile")
+	params.Set("scope", "openid profile offline_access")
 	params.Set("state", state)
-	params.Set("connector_id", institutionID) // Akoya-specific: selects the bank
 
-	return idpBase + "/auth?" + params.Encode(), nil
+	return c.cfg.BaseURL + "/auth?" + params.Encode(), nil
 }
 
 // ExchangeCode exchanges an Akoya authorization code for access + ID tokens.
-func (c *Client) ExchangeCode(ctx context.Context, code, redirectURI string) (*aggregator.ProviderToken, error) {
+// Docs: https://docs.akoya.com/reference/get-token
+func (c *Client) ExchangeCode(ctx context.Context, _ /* institutionID */, code, redirectURI string) (*aggregator.ProviderToken, error) {
+	// Akoya token endpoint is flat — no realm/institution in the path
+	// Discovery confirms only client_secret_basic (Basic Auth) is supported
 	body := url.Values{}
 	body.Set("grant_type", "authorization_code")
 	body.Set("code", code)
 	body.Set("redirect_uri", redirectURI)
-	body.Set("client_id", c.cfg.ClientID)
-	body.Set("client_secret", c.cfg.ClientSecret)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.cfg.BaseURL+"/token",
@@ -146,6 +157,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code, redirectURI string) (*a
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(c.cfg.ClientID, c.cfg.ClientSecret)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -160,6 +172,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code, redirectURI string) (*a
 
 	var result struct {
 		AccessToken  string `json:"access_token"`
+		IDToken      string `json:"id_token"`      // Akoya: use id_token as bearer for data API calls
 		RefreshToken string `json:"refresh_token"`
 		ExpiresIn    int    `json:"expires_in"` // seconds
 	}
@@ -167,8 +180,14 @@ func (c *Client) ExchangeCode(ctx context.Context, code, redirectURI string) (*a
 		return nil, fmt.Errorf("akoya parse token: %w", err)
 	}
 
+	// Akoya data API requires the id_token as the bearer token, not the access_token
+	bearerToken := result.IDToken
+	if bearerToken == "" {
+		bearerToken = result.AccessToken // fallback
+	}
+
 	token := &aggregator.ProviderToken{
-		AccessToken:  result.AccessToken,
+		AccessToken:  bearerToken,
 		RefreshToken: result.RefreshToken,
 	}
 	if result.ExpiresIn > 0 {
@@ -198,11 +217,18 @@ func (c *Client) RevokeItem(ctx context.Context, item *models.Item) error {
 }
 
 func (c *Client) get(ctx context.Context, item *models.Item, path string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.BaseURL+path, nil)
+	// path already contains the full resource path including connector_id
+	// e.g. /accounts-info/v2/mikomo or /transactions/v2/mikomo?...
+	dataURL := c.cfg.DataURL + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dataURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	// The provider_item_id holds the Akoya OAuth access token (encrypted at rest in DB)
+	// item.ProviderItemID holds the decrypted Akoya access token (decrypted by handler before this call)
+	tokenPreview := item.ProviderItemID
+	if len(tokenPreview) > 20 {
+		tokenPreview = tokenPreview[:20] + "..."
+	}
 	req.Header.Set("Authorization", "Bearer "+item.ProviderItemID)
 	req.Header.Set("Accept", "application/json")
 
@@ -212,12 +238,13 @@ func (c *Client) get(ctx context.Context, item *models.Item, path string) ([]byt
 	}
 	defer resp.Body.Close()
 
+	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("akoya %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("akoya %d url=%s token_prefix=%s body=%s",
+			resp.StatusCode, dataURL, tokenPreview, string(body))
 	}
 
-	return io.ReadAll(resp.Body)
+	return body, nil
 }
 
 // --- FDX response types (Akoya follows FDX standard) ---
@@ -235,9 +262,10 @@ type fdxAccount struct {
 
 func (a fdxAccount) toModel(item *models.Item) models.Account {
 	return models.Account{
-		ItemID:       item.ID,
-		Name:         a.DisplayName,
-		OfficialName: a.DisplayName,
+		ItemID:            item.ID,
+		ProviderAccountID: a.AccountID,
+		Name:              a.DisplayName,
+		OfficialName:      a.DisplayName,
 		Type:         models.AccountType(normalizeAccountType(a.AccountType)),
 		Subtype:      a.AccountSubType,
 		Mask:         a.LastFour,

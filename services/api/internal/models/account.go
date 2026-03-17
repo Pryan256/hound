@@ -8,16 +8,17 @@ import (
 
 // Account represents a financial account connected via an Item.
 type Account struct {
-	ID            uuid.UUID   `json:"account_id" db:"id"`
-	ItemID        uuid.UUID   `json:"item_id" db:"item_id"`
-	Name          string      `json:"name" db:"name"`
-	OfficialName  string      `json:"official_name" db:"official_name"`
-	Type          AccountType `json:"type" db:"type"`
-	Subtype       string      `json:"subtype" db:"subtype"`
-	Mask          string      `json:"mask" db:"mask"` // last 4 digits
-	Balances      Balances    `json:"balances" db:"balances"`
-	CreatedAt     time.Time   `json:"created_at" db:"created_at"`
-	UpdatedAt     time.Time   `json:"updated_at" db:"updated_at"`
+	ID                uuid.UUID   `json:"account_id" db:"id"`
+	ItemID            uuid.UUID   `json:"item_id" db:"item_id"`
+	ProviderAccountID string      `json:"provider_account_id" db:"-"` // provider's raw ID, not persisted
+	Name              string      `json:"name" db:"name"`
+	OfficialName      string      `json:"official_name" db:"official_name"`
+	Type              AccountType `json:"type" db:"type"`
+	Subtype           string      `json:"subtype" db:"subtype"`
+	Mask              string      `json:"mask" db:"mask"` // last 4 digits
+	Balances          Balances    `json:"balances" db:"balances"`
+	CreatedAt         time.Time   `json:"created_at" db:"created_at"`
+	UpdatedAt         time.Time   `json:"updated_at" db:"updated_at"`
 }
 
 type AccountType string

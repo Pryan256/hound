@@ -1,6 +1,15 @@
-version: "3.9"
-
 services:
+  migrate:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile.migrate
+    environment:
+      - DATABASE_URL=postgres://hound:hound@postgres:5432/hound?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build:
       context: ./services/api
@@ -14,30 +23,32 @@ services:
       - REDIS_URL=redis://redis:6379
       - AKOYA_CLIENT_ID=${AKOYA_CLIENT_ID}
       - AKOYA_CLIENT_SECRET=${AKOYA_CLIENT_SECRET}
+      - AKOYA_BASE_URL=${AKOYA_BASE_URL}
       - FINICITY_PARTNER_ID=${FINICITY_PARTNER_ID}
       - FINICITY_PARTNER_SECRET=${FINICITY_PARTNER_SECRET}
       - FINICITY_APP_KEY=${FINICITY_APP_KEY}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - BASE_URL=http://localhost:8080
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./services/api:/app
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
-  enrichment:
-    build:
-      context: ./services/enrichment
-      dockerfile: Dockerfile
-    ports:
-      - "8081:8081"
-    environment:
-      - ENV=development
-      - PORT=8081
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-    restart: unless-stopped
+  # enrichment:
+  #   build:
+  #     context: ./services/enrichment
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "8081:8081"
+  #   environment:
+  #     - ENV=development
+  #     - PORT=8081
+  #     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+  #   restart: unless-stopped
 
   postgres:
     image: timescale/timescaledb:latest-pg16
@@ -49,7 +60,6 @@ services:
       - POSTGRES_DB=hound
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./services/api/migrations:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hound"]
       interval: 5s
@@ -68,16 +78,16 @@ services:
       timeout: 3s
       retries: 5
 
-  portal:
-    build:
-      context: ./packages/portal
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8080
-    depends_on:
-      - api
+  # portal:
+  #   build:
+  #     context: ./packages/portal
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - NEXT_PUBLIC_API_URL=http://localhost:8080
+  #   depends_on:
+  #     - api
 
 volumes:
   postgres_data:

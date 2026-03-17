@@ -202,7 +202,7 @@ func (c *Client) GenerateConnectURL(ctx context.Context, customerID, state, redi
 
 // ExchangeCode is a no-op for Finicity — they use webhook events or redirect params
 // to signal completion, not a standard OAuth code exchange.
-func (c *Client) ExchangeCode(_ context.Context, _, _ string) (*aggregator.ProviderToken, error) {
+func (c *Client) ExchangeCode(_ context.Context, _, _, _ string) (*aggregator.ProviderToken, error) {
 	return nil, fmt.Errorf("finicity: use webhook or redirect callback — ExchangeCode not applicable")
 }
 

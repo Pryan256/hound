@@ -18,6 +18,12 @@ func (h *Handler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.decryptItem(item); err != nil {
+		h.log.Error("failed to decrypt item token", zap.String("item_id", item.ID.String()), zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "token decryption failed")
+		return
+	}
+
 	accounts, err := h.agg.GetAccounts(r.Context(), item)
 	if err != nil {
 		h.log.Error("failed to fetch accounts", zap.String("item_id", item.ID.String()), zap.Error(err))
@@ -39,6 +45,12 @@ func (h *Handler) GetAccountBalance(w http.ResponseWriter, r *http.Request) {
 	item, err := h.db.GetItemByAccessToken(r.Context(), appID, accessToken)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_ACCESS_TOKEN", "access token is invalid")
+		return
+	}
+
+	if err := h.decryptItem(item); err != nil {
+		h.log.Error("failed to decrypt item token", zap.String("item_id", item.ID.String()), zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "token decryption failed")
 		return
 	}
 

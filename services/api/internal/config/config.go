@@ -22,7 +22,8 @@ type Config struct {
 type AkoyaConfig struct {
 	ClientID     string
 	ClientSecret string
-	BaseURL      string
+	BaseURL      string // IDP base — auth/token endpoints
+	DataURL      string // Data API base — accounts/transactions endpoints
 }
 
 type FinicityConfig struct {
@@ -45,6 +46,7 @@ func Load() *Config {
 			ClientID:     getEnv("AKOYA_CLIENT_ID", ""),
 			ClientSecret: getEnv("AKOYA_CLIENT_SECRET", ""),
 			BaseURL:      getEnv("AKOYA_BASE_URL", "https://sandbox-idp.ddp.akoya.com"),
+			DataURL:      getEnv("AKOYA_DATA_URL", "https://sandbox-products.ddp.akoya.com"),
 		},
 
 		Finicity: FinicityConfig{

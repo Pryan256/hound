@@ -45,6 +45,10 @@ func New(cfg *config.Config, db *database.DB, log *zap.Logger) http.Handler {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// Public browser-facing pages (no auth)
+	r.Get("/demo", h.Demo)
+	r.Get("/link/oauth/complete", h.OAuthComplete)
+
 	// /link/ — browser-facing routes authenticated by link_token (called from Link widget)
 	r.Route("/link", func(r chi.Router) {
 		r.Use(middleware.LinkTokenAuth(db, log))

@@ -48,6 +48,12 @@ func (h *Handler) GetTransactions(w http.ResponseWriter, r *http.Request) {
 		offset, _ = strconv.Atoi(q.Get("offset"))
 	}
 
+	if err := h.decryptItem(item); err != nil {
+		h.log.Error("failed to decrypt item token", zap.String("item_id", item.ID.String()), zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "token decryption failed")
+		return
+	}
+
 	result, err := h.agg.GetTransactions(r.Context(), item, startDate, endDate, count, offset)
 	if err != nil {
 		h.log.Error("failed to fetch transactions", zap.String("item_id", item.ID.String()), zap.Error(err))
@@ -71,6 +77,12 @@ func (h *Handler) GetIdentity(w http.ResponseWriter, r *http.Request) {
 	item, err := h.db.GetItemByAccessToken(r.Context(), appID, accessToken)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_ACCESS_TOKEN", "access token is invalid")
+		return
+	}
+
+	if err := h.decryptItem(item); err != nil {
+		h.log.Error("failed to decrypt item token", zap.String("item_id", item.ID.String()), zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "token decryption failed")
 		return
 	}
 

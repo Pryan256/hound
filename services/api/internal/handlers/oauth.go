@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
-	"github.com/hound-fi/api/internal/encryption"
 	"github.com/hound-fi/api/internal/middleware"
 	"go.uber.org/zap"
 )
@@ -38,7 +37,7 @@ func (h *Handler) OAuthInitiate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up institution to confirm it exists and get its provider
-	inst, err := h.db.GetInstitution(r.Context(), req.InstitutionID)
+	_, err := h.db.GetInstitution(r.Context(), req.InstitutionID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "INSTITUTION_NOT_FOUND", "institution not found")
 		return
@@ -58,7 +57,7 @@ func (h *Handler) OAuthInitiate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist the session with a new state token (CSRF protection)
-	state, err := h.db.CreateOAuthSession(r.Context(), appID, linkToken, req.InstitutionID, inst.ID)
+	state, err := h.db.CreateOAuthSession(r.Context(), appID, linkToken, req.InstitutionID, provider.Name())
 	if err != nil {
 		h.log.Error("failed to create oauth session", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to initiate oauth")
@@ -128,7 +127,7 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Exchange code for provider tokens
-	token, err := provider.ExchangeCode(r.Context(), req.Code, redirectURI)
+	token, err := provider.ExchangeCode(r.Context(), session.InstitutionID, req.Code, redirectURI)
 	if err != nil {
 		h.log.Error("oauth code exchange failed",
 			zap.String("provider", provider.Name()),
@@ -139,14 +138,7 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Encrypt tokens before storage — never store plaintext provider credentials
-	enc, err := encryption.New(h.cfg.EncryptionKey)
-	if err != nil {
-		h.log.Error("encryptor init failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "encryption unavailable")
-		return
-	}
-
-	encAccessToken, err := enc.Encrypt(token.AccessToken)
+	encAccessToken, err := h.enc.Encrypt(token.AccessToken)
 	if err != nil {
 		h.log.Error("failed to encrypt access token", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "token storage failed")
@@ -155,7 +147,7 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	encRefreshToken := ""
 	if token.RefreshToken != "" {
-		encRefreshToken, err = enc.Encrypt(token.RefreshToken)
+		encRefreshToken, err = h.enc.Encrypt(token.RefreshToken)
 		if err != nil {
 			h.log.Error("failed to encrypt refresh token", zap.Error(err))
 			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "token storage failed")

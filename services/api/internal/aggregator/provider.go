@@ -39,8 +39,9 @@ type Provider interface {
 	GetAuthorizationURL(institutionID, state, redirectURI string) (string, error)
 
 	// ExchangeCode exchanges an OAuth authorization code for provider tokens.
+	// institutionID is required for providers like Akoya that use per-institution token endpoints.
 	// Returns the raw access token (caller is responsible for encrypting before storage).
-	ExchangeCode(ctx context.Context, code, redirectURI string) (*ProviderToken, error)
+	ExchangeCode(ctx context.Context, institutionID, code, redirectURI string) (*ProviderToken, error)
 }
 
 // ProviderToken holds the result of a successful OAuth code exchange.
