@@ -2,6 +2,7 @@ package aggregator
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/hound-fi/api/internal/models"
@@ -42,7 +43,16 @@ type Provider interface {
 	// institutionID is required for providers like Akoya that use per-institution token endpoints.
 	// Returns the raw access token (caller is responsible for encrypting before storage).
 	ExchangeCode(ctx context.Context, institutionID, code, redirectURI string) (*ProviderToken, error)
+
+	// RefreshToken uses a refresh token to obtain a new access token.
+	// refreshToken is the plaintext (pre-decryption) value — the caller handles
+	// decrypt/re-encrypt so the provider never sees the encrypted form.
+	// Returns ErrRefreshNotSupported if the provider doesn't use refresh tokens.
+	RefreshToken(ctx context.Context, refreshToken string) (*ProviderToken, error)
 }
+
+// ErrRefreshNotSupported is returned by providers that don't use refresh tokens.
+var ErrRefreshNotSupported = fmt.Errorf("provider does not support token refresh")
 
 // ProviderToken holds the result of a successful OAuth code exchange.
 type ProviderToken struct {

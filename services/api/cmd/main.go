@@ -9,8 +9,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hound-fi/api/internal/aggregator"
+	"github.com/hound-fi/api/internal/aggregator/akoya"
+	"github.com/hound-fi/api/internal/aggregator/finicity"
 	"github.com/hound-fi/api/internal/config"
 	"github.com/hound-fi/api/internal/database"
+	"github.com/hound-fi/api/internal/encryption"
+	"github.com/hound-fi/api/internal/refresh"
 	"github.com/hound-fi/api/internal/server"
 	"go.uber.org/zap"
 )
@@ -41,7 +46,19 @@ func main() {
 		log.Fatal("failed to run migrations", zap.Error(err))
 	}
 
-	srv := server.New(cfg, db, log)
+	// Build the aggregator router once — shared by the HTTP server and the refresher.
+	agg := aggregator.NewRouterWithLogger(log,
+		akoya.New(cfg.Akoya),
+		finicity.New(cfg.Finicity),
+	)
+
+	// Encryptor — also shared with the refresher (needs to decrypt/re-encrypt tokens).
+	enc, err := encryption.New(cfg.EncryptionKey)
+	if err != nil {
+		log.Fatal("failed to init encryptor", zap.Error(err))
+	}
+
+	srv := server.New(cfg, db, agg, log)
 
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -51,6 +68,14 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	// Root context — cancelled on SIGINT/SIGTERM to trigger graceful shutdown.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Start the token refresher in the background.
+	go refresh.New(db, agg, enc, log).Start(ctx)
+
+	// Start HTTP server.
 	go func() {
 		log.Info("starting server", zap.String("port", cfg.Port), zap.String("env", cfg.Env))
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -58,15 +83,14 @@ func main() {
 		}
 	}()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	// Block until signal received.
+	<-ctx.Done()
 
 	log.Info("shutting down server")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := httpServer.Shutdown(ctx); err != nil {
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Fatal("forced shutdown", zap.Error(err))
 	}
 

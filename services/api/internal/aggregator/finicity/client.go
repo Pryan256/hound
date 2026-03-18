@@ -206,6 +206,12 @@ func (c *Client) ExchangeCode(_ context.Context, _, _, _ string) (*aggregator.Pr
 	return nil, fmt.Errorf("finicity: use webhook or redirect callback — ExchangeCode not applicable")
 }
 
+// RefreshToken is not applicable to Finicity — they use short-lived app tokens
+// managed internally by appToken(), not per-user OAuth refresh tokens.
+func (c *Client) RefreshToken(_ context.Context, _ string) (*aggregator.ProviderToken, error) {
+	return nil, aggregator.ErrRefreshNotSupported
+}
+
 func (c *Client) RevokeItem(ctx context.Context, item *models.Item) error {
 	token, err := c.appToken(ctx)
 	if err != nil {

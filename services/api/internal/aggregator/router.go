@@ -75,6 +75,15 @@ func (r *Router) RevokeItem(ctx context.Context, item *models.Item) error {
 	return p.RevokeItem(ctx, item)
 }
 
+// RefreshToken calls the matching provider's RefreshToken for the given item.
+func (r *Router) RefreshToken(ctx context.Context, item *models.Item, refreshToken string) (*ProviderToken, error) {
+	p, err := r.providerFor(item)
+	if err != nil {
+		return nil, err
+	}
+	return p.RefreshToken(ctx, refreshToken)
+}
+
 // SelectProvider picks the best provider for a new institution connection.
 // Called during the Link flow to determine which backend to use.
 func (r *Router) SelectProvider(ctx context.Context, institutionID string) (Provider, error) {

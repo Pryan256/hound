@@ -201,6 +201,64 @@ func (c *Client) ExchangeCode(ctx context.Context, _ /* institutionID */, code, 
 	return token, nil
 }
 
+// RefreshToken exchanges a refresh token for a new access token.
+// Akoya uses standard OAuth2 refresh_token grant on the same /token endpoint.
+func (c *Client) RefreshToken(ctx context.Context, refreshToken string) (*aggregator.ProviderToken, error) {
+	if refreshToken == "" {
+		return nil, aggregator.ErrRefreshNotSupported
+	}
+
+	body := url.Values{}
+	body.Set("grant_type", "refresh_token")
+	body.Set("refresh_token", refreshToken)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.cfg.BaseURL+"/token",
+		bytes.NewBufferString(body.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(c.cfg.ClientID, c.cfg.ClientSecret)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("akoya refresh token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("akoya refresh token %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result struct {
+		AccessToken  string `json:"access_token"`
+		IDToken      string `json:"id_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int    `json:"expires_in"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("akoya parse refresh response: %w", err)
+	}
+
+	bearerToken := result.IDToken
+	if bearerToken == "" {
+		bearerToken = result.AccessToken
+	}
+
+	token := &aggregator.ProviderToken{
+		AccessToken:  bearerToken,
+		RefreshToken: result.RefreshToken,
+	}
+	if result.ExpiresIn > 0 {
+		expiry := time.Now().UTC().Add(time.Duration(result.ExpiresIn) * time.Second)
+		token.ExpiresAt = &expiry
+	}
+
+	return token, nil
+}
+
 func (c *Client) RevokeItem(ctx context.Context, item *models.Item) error {
 	// Revoke the OAuth token at Akoya
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete,

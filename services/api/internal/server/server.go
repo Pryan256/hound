@@ -7,8 +7,6 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/hound-fi/api/internal/aggregator"
-	"github.com/hound-fi/api/internal/aggregator/akoya"
-	"github.com/hound-fi/api/internal/aggregator/finicity"
 	"github.com/hound-fi/api/internal/config"
 	"github.com/hound-fi/api/internal/database"
 	"github.com/hound-fi/api/internal/handlers"
@@ -16,7 +14,9 @@ import (
 	"go.uber.org/zap"
 )
 
-func New(cfg *config.Config, db *database.DB, log *zap.Logger) http.Handler {
+// New builds the HTTP router. The aggregator router is constructed in main so it
+// can be shared with the token refresher background job.
+func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, log *zap.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// Global middleware
@@ -31,13 +31,8 @@ func New(cfg *config.Config, db *database.DB, log *zap.Logger) http.Handler {
 		MaxAge:         300,
 	}))
 
-	// Build aggregator router
-	akoyaClient := akoya.New(cfg.Akoya)
-	finicityClient := finicity.New(cfg.Finicity)
-	aggRouter := aggregator.NewRouterWithLogger(log, akoyaClient, finicityClient)
-
 	// Handlers
-	h := handlers.New(db, aggRouter, log, cfg)
+	h := handlers.New(db, agg, log, cfg)
 
 	// Health check (no auth)
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
