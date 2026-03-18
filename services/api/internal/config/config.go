@@ -10,6 +10,7 @@ type Config struct {
 	DatabaseURL   string
 	RedisURL      string
 	EncryptionKey string
+	AdminSecret   string // protects /management/* and /portal — empty = allow all in dev
 
 	// Aggregator credentials
 	Akoya    AkoyaConfig
@@ -40,6 +41,7 @@ func Load() *Config {
 		DatabaseURL:   getEnv("DATABASE_URL", "postgres://hound:hound@localhost:5432/hound?sslmode=disable"),
 		RedisURL:      getEnv("REDIS_URL", "redis://localhost:6379"),
 		EncryptionKey: mustGetEnv("ENCRYPTION_KEY"),
+		AdminSecret:   getEnv("ADMIN_SECRET", ""),
 		EnrichmentURL: getEnv("ENRICHMENT_URL", "http://localhost:8081"),
 
 		Akoya: AkoyaConfig{

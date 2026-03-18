@@ -8,8 +8,12 @@ import (
 
 // Transaction represents a financial transaction.
 type Transaction struct {
-	ID                uuid.UUID        `json:"transaction_id" db:"id"`
-	AccountID         uuid.UUID        `json:"account_id" db:"account_id"`
+	ID                    uuid.UUID        `json:"transaction_id" db:"id"`
+	AccountID             uuid.UUID        `json:"account_id" db:"account_id"`
+	ProviderTransactionID string           `json:"provider_transaction_id,omitempty" db:"provider_transaction_id"`
+	// ProviderAccountID is the provider's account identifier — used internally to
+	// resolve the DB account UUID before upsert. Never persisted or serialised.
+	ProviderAccountID     string           `json:"-" db:"-"`
 	Amount            float64          `json:"amount" db:"amount"` // positive = debit, negative = credit
 	Currency          string           `json:"iso_currency_code" db:"currency"`
 	Date              time.Time        `json:"date" db:"date"`

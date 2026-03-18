@@ -108,13 +108,15 @@ func (c *Client) GetTransactions(ctx context.Context, item *models.Item, start, 
 			continue
 		}
 		for _, t := range resp.Transactions {
-			txns := t.toModel()
-			txns.AccountID = acct.ID
-			allTxns = append(allTxns, txns)
+			txn := t.toModel()
+			// Carry the provider account ID so the handler can resolve the DB UUID.
+			txn.ProviderAccountID = acct.ProviderAccountID
+			allTxns = append(allTxns, txn)
 		}
 	}
 
 	return &models.TransactionsResponse{
+		Accounts:     accounts, // needed by handler to build providerAccountID → DB UUID map
 		Transactions: allTxns,
 		TotalCount:   len(allTxns),
 	}, nil
@@ -381,11 +383,12 @@ func (t fdxTransaction) toModel() models.Transaction {
 	}
 
 	return models.Transaction{
-		Amount:   d.Amount,
-		Date:     date,
-		Name:     d.Description,
-		Pending:  d.Status == "PENDING",
-		Category: categories,
+		ProviderTransactionID: d.TransactionID,
+		Amount:                d.Amount,
+		Date:                  date,
+		Name:                  d.Description,
+		Pending:               d.Status == "PENDING",
+		Category:              categories,
 	}
 }
 

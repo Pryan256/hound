@@ -53,6 +53,17 @@ func New(cfg *config.Config, db *database.DB, log *zap.Logger) http.Handler {
 		http.StripPrefix("/static", staticFS).ServeHTTP(w, r)
 	})
 
+	// Developer portal + management API (protected by ADMIN_SECRET)
+	r.Get("/portal", h.Portal)
+	r.Route("/management", func(r chi.Router) {
+		r.Use(middleware.AdminAuth(cfg.AdminSecret, log))
+		r.Get("/applications", h.ListApplications)
+		r.Post("/applications", h.CreateApplication)
+		r.Get("/applications/{appID}/keys", h.ListAPIKeys)
+		r.Post("/applications/{appID}/keys", h.CreateAPIKey)
+		r.Delete("/applications/{appID}/keys/{keyID}", h.RevokeAPIKey)
+	})
+
 	// Public browser-facing pages (no auth)
 	r.Get("/demo", h.Demo)
 	r.Get("/link/widget", h.LinkWidget)

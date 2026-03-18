@@ -10,7 +10,7 @@ import (
 type Account struct {
 	ID                uuid.UUID   `json:"account_id" db:"id"`
 	ItemID            uuid.UUID   `json:"item_id" db:"item_id"`
-	ProviderAccountID string      `json:"provider_account_id" db:"-"` // provider's raw ID, not persisted
+	ProviderAccountID string      `json:"provider_account_id" db:"provider_account_id"`
 	Name              string      `json:"name" db:"name"`
 	OfficialName      string      `json:"official_name" db:"official_name"`
 	Type              AccountType `json:"type" db:"type"`

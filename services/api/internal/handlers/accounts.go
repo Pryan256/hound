@@ -31,8 +31,21 @@ func (h *Handler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Persist to DB — upsert gives us real UUIDs and deduplicates on re-fetch.
+	persisted, err := h.db.UpsertAccounts(r.Context(), item.ID, accounts)
+	if err != nil {
+		h.log.Error("failed to persist accounts", zap.String("item_id", item.ID.String()), zap.Error(err))
+		// Non-fatal: return provider data even if DB write fails
+		writeJSON(w, http.StatusOK, map[string]any{
+			"accounts":   accounts,
+			"item":       item,
+			"request_id": r.Header.Get("X-Request-ID"),
+		})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"accounts":   accounts,
+		"accounts":   persisted,
 		"item":       item,
 		"request_id": r.Header.Get("X-Request-ID"),
 	})

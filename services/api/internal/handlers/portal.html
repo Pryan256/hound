@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hound Developer Portal</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f1117;
+      --surface:   #1a1d27;
+      --border:    #2a2d3a;
+      --text:      #e8eaf0;
+      --muted:     #8b8fa8;
+      --accent:    #6c63ff;
+      --test:      #22c55e;
+      --live:      #f59e0b;
+      --danger:    #ef4444;
+      --radius:    10px;
+      --font:      'Inter', system-ui, -apple-system, sans-serif;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      z-index: 10;
+    }
+    .logo { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+    .logo span { color: var(--accent); }
+    .header-tag {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--muted);
+      padding: 2px 7px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+    #auth-status { font-size: 13px; color: var(--muted); }
+    #auth-status.ok { color: var(--test); }
+
+    /* ── Layout ── */
+    main {
+      flex: 1;
+      max-width: 900px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 40px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 20px;
+    }
+
+    /* ── Form elements ── */
+    .form-row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 160px; }
+    label { font-size: 12px; color: var(--muted); font-weight: 500; }
+    input, select {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 9px 12px;
+      font-size: 14px;
+      font-family: var(--font);
+      outline: none;
+      transition: border-color 0.15s;
+      width: 100%;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+    input::placeholder { color: var(--muted); }
+    select option { background: var(--surface); }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 9px 18px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      font-family: var(--font);
+      transition: opacity 0.15s, background 0.15s;
+      white-space: nowrap;
+    }
+    .btn:hover { opacity: 0.88; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+    .btn-danger {
+      background: transparent;
+      color: var(--danger);
+      border: 1px solid var(--danger);
+      padding: 5px 12px;
+      font-size: 12px;
+    }
+    .btn-sm { padding: 5px 12px; font-size: 12px; }
+
+    /* ── Auth gate ── */
+    #auth-gate { max-width: 440px; margin: 0 auto; }
+    #auth-gate .card-title { text-align: center; }
+    #auth-gate p {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 20px;
+      text-align: center;
+      line-height: 1.6;
+    }
+    #auth-gate .form-row { flex-direction: column; }
+    #auth-gate .btn { width: 100%; justify-content: center; margin-top: 4px; }
+
+    /* ── App selector ── */
+    .app-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .app-row select { flex: 1; max-width: 360px; }
+
+    /* ── Keys list ── */
+    .keys-list { display: flex; flex-direction: column; gap: 10px; }
+    .key-item {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+    .key-item.revoked { opacity: 0.4; }
+    .env-badge {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .env-badge.test { background: rgba(34,197,94,0.12); color: var(--test); }
+    .env-badge.live { background: rgba(245,158,11,0.12); color: var(--live); }
+    .key-meta { flex: 1; min-width: 100px; }
+    .key-meta .name { font-size: 14px; font-weight: 500; }
+    .key-meta .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .key-mask {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 12px;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 5px 10px;
+      flex: 2;
+      min-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .key-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+    /* ── Reveal banner ── */
+    .reveal-banner {
+      background: rgba(108,99,255,0.08);
+      border: 1px solid rgba(108,99,255,0.3);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .reveal-banner p { font-size: 13px; color: var(--muted); margin-bottom: 10px; line-height: 1.5; }
+    .reveal-banner strong { color: var(--text); }
+    .reveal-key {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 13px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      color: var(--accent);
+      word-break: break-all;
+      margin-bottom: 10px;
+    }
+
+    /* ── Misc ── */
+    .empty { text-align: center; padding: 32px; color: var(--muted); font-size: 14px; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+    .section-sep { margin-top: 20px; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 18px;
+      font-size: 14px;
+      color: var(--text);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      transform: translateY(80px);
+      opacity: 0;
+      transition: transform 0.2s, opacity 0.2s;
+      z-index: 100;
+      pointer-events: none;
+    }
+    #toast.show { transform: translateY(0); opacity: 1; }
+
+    @media (max-width: 600px) {
+      .key-mask { display: none; }
+      main { padding: 24px 16px; }
+      header { padding: 0 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">hound<span>.</span></div>
+  <div class="header-tag">Developer Portal</div>
+  <div class="header-right">
+    <span id="auth-status">Not authenticated</span>
+    <button class="btn btn-ghost btn-sm" id="logout-btn" style="display:none" onclick="logout()">Sign out</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- Auth gate -->
+  <div id="auth-gate" class="card" style="display:none">
+    <div class="card-title">Admin Access</div>
+    <p>Enter your <strong>ADMIN_SECRET</strong> to manage applications and API keys.</p>
+    <div class="form-row" style="flex-direction:column">
+      <div class="field">
+        <label>Admin Secret</label>
+        <input type="password" id="secret-input" placeholder="Enter admin secret…" />
+      </div>
+      <button class="btn btn-primary" onclick="saveSecret()">Continue</button>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div id="main-content" style="display:none;flex-direction:column;gap:32px">
+
+    <!-- Create Application -->
+    <div class="card">
+      <div class="card-title">Create Application</div>
+      <div class="form-row">
+        <div class="field">
+          <label>App Name</label>
+          <input type="text" id="app-name" placeholder="My App" />
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input type="email" id="app-email" placeholder="dev@example.com" />
+        </div>
+        <button class="btn btn-primary" style="align-self:flex-end" onclick="createApp()">Create</button>
+      </div>
+    </div>
+
+    <!-- Key management -->
+    <div class="card" id="keys-section" style="display:none">
+      <div class="card-title">API Keys</div>
+
+      <div class="app-row" style="margin-bottom:20px">
+        <select id="app-select" onchange="loadKeys()">
+          <option value="">Select an application…</option>
+        </select>
+        <button class="btn btn-ghost btn-sm" onclick="loadApps()">&#8635; Refresh</button>
+      </div>
+
+      <div id="new-key-area" style="display:none">
+        <div class="form-row" style="margin-bottom:16px">
+          <div class="field" style="max-width:140px">
+            <label>Environment</label>
+            <select id="key-env">
+              <option value="test">Test</option>
+              <option value="live">Live</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Label (optional)</label>
+            <input type="text" id="key-label" placeholder="e.g. Backend server" />
+          </div>
+          <button class="btn btn-primary" style="align-self:flex-end" onclick="createKey()">Generate Key</button>
+        </div>
+
+        <!-- Reveal banner (one-time display) -->
+        <div class="reveal-banner" id="reveal-banner" style="display:none">
+          <p>&#9888;&#65039; <strong>Copy this key now.</strong> It will never be shown again.</p>
+          <div class="reveal-key" id="reveal-value"></div>
+          <button class="btn btn-ghost btn-sm" id="copy-btn" onclick="copyRevealKey()">Copy to clipboard</button>
+        </div>
+
+        <hr />
+        <div class="keys-list" id="keys-list">
+          <div class="empty">No keys yet. Generate one above.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+  let adminSecret = '';
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  window.onload = function() {
+    var saved = sessionStorage.getItem('hound_admin_secret');
+    if (saved) {
+      adminSecret = saved;
+      showMain();
+      loadApps();
+    } else {
+      document.getElementById('auth-gate').style.display = 'block';
+    }
+  };
+
+  function saveSecret() {
+    var val = document.getElementById('secret-input').value.trim();
+    if (!val) return;
+    adminSecret = val;
+    sessionStorage.setItem('hound_admin_secret', val);
+    document.getElementById('auth-gate').style.display = 'none';
+    showMain();
+    loadApps();
+  }
+
+  function showMain() {
+    var mc = document.getElementById('main-content');
+    mc.style.display = 'flex';
+    document.getElementById('auth-status').textContent = 'Authenticated';
+    document.getElementById('auth-status').className = 'ok';
+    document.getElementById('logout-btn').style.display = 'inline-flex';
+  }
+
+  function logout() {
+    sessionStorage.removeItem('hound_admin_secret');
+    location.reload();
+  }
+
+  // ── API helper ─────────────────────────────────────────────────────────────
+  function api(method, path, body) {
+    var opts = {
+      method: method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + adminSecret,
+      }
+    };
+    if (body) opts.body = JSON.stringify(body);
+    return fetch(path, opts).then(function(res) {
+      return res.json().then(function(json) {
+        if (!res.ok) throw new Error(json.error_message || 'Request failed (' + res.status + ')');
+        return json;
+      });
+    });
+  }
+
+  // ── Applications ───────────────────────────────────────────────────────────
+  function loadApps() {
+    return api('GET', '/management/applications').then(function(data) {
+      var apps = data.applications || [];
+      var sel = document.getElementById('app-select');
+      var prev = sel.value;
+      sel.innerHTML = '<option value="">Select an application…</option>';
+      apps.forEach(function(a) {
+        var opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = a.name + ' (' + a.email + ')';
+        sel.appendChild(opt);
+      });
+      if (apps.length > 0) {
+        document.getElementById('keys-section').style.display = 'block';
+        sel.value = prev || apps[0].id;
+        if (sel.value) loadKeys();
+      }
+    }).catch(function(e) {
+      toast('Error: ' + e.message);
+    });
+  }
+
+  function createApp() {
+    var name = document.getElementById('app-name').value.trim();
+    var email = document.getElementById('app-email').value.trim();
+    if (!name || !email) { toast('Name and email are required'); return; }
+    api('POST', '/management/applications', { name: name, email: email }).then(function(app) {
+      toast('Application created: ' + app.name);
+      document.getElementById('app-name').value = '';
+      document.getElementById('app-email').value = '';
+      return loadApps().then(function() {
+        document.getElementById('app-select').value = app.id;
+        loadKeys();
+      });
+    }).catch(function(e) { toast('Error: ' + e.message); });
+  }
+
+  // ── Keys ───────────────────────────────────────────────────────────────────
+  function loadKeys() {
+    var appID = document.getElementById('app-select').value;
+    if (!appID) return;
+    document.getElementById('new-key-area').style.display = 'block';
+    document.getElementById('reveal-banner').style.display = 'none';
+    api('GET', '/management/applications/' + appID + '/keys').then(function(data) {
+      renderKeys(data.keys || []);
+    }).catch(function(e) { toast('Error loading keys: ' + e.message); });
+  }
+
+  function renderKeys(keys) {
+    var list = document.getElementById('keys-list');
+    if (!keys.length) {
+      list.innerHTML = '<div class="empty">No keys yet. Generate one above.</div>';
+      return;
+    }
+    list.innerHTML = keys.map(function(k) {
+      var revoked = !!k.revoked_at;
+      var date = new Date(k.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      var revokeBtn = revoked
+        ? '<span style="font-size:12px;color:var(--muted)">Revoked</span>'
+        : '<button class="btn btn-danger" onclick="revokeKey(\'' + k.application_id + '\',\'' + k.id + '\')">Revoke</button>';
+      return '<div class="key-item' + (revoked ? ' revoked' : '') + '">'
+        + '<span class="env-badge ' + k.env + '">' + k.env + '</span>'
+        + '<div class="key-meta">'
+        + '<div class="name">' + (k.label || 'Unnamed key') + '</div>'
+        + '<div class="sub">Created ' + date + (revoked ? ' &middot; Revoked' : '') + '</div>'
+        + '</div>'
+        + '<div class="key-mask">hound_' + k.env + '_&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</div>'
+        + '<div class="key-actions">' + revokeBtn + '</div>'
+        + '</div>';
+    }).join('');
+  }
+
+  function createKey() {
+    var appID = document.getElementById('app-select').value;
+    if (!appID) { toast('Select an application first'); return; }
+    var env = document.getElementById('key-env').value;
+    var label = document.getElementById('key-label').value.trim();
+    api('POST', '/management/applications/' + appID + '/keys', { env: env, label: label }).then(function(key) {
+      document.getElementById('reveal-value').textContent = key.key;
+      document.getElementById('reveal-banner').style.display = 'block';
+      document.getElementById('key-label').value = '';
+      toast('Key generated — copy it now!');
+      loadKeys();
+    }).catch(function(e) { toast('Error: ' + e.message); });
+  }
+
+  function copyRevealKey() {
+    var val = document.getElementById('reveal-value').textContent;
+    navigator.clipboard.writeText(val).then(function() {
+      document.getElementById('copy-btn').textContent = 'Copied!';
+      setTimeout(function() { document.getElementById('copy-btn').textContent = 'Copy to clipboard'; }, 2000);
+      toast('Copied to clipboard');
+    });
+  }
+
+  function revokeKey(appID, keyID) {
+    if (!confirm('Permanently revoke this key? Any integrations using it will break immediately.')) return;
+    api('DELETE', '/management/applications/' + appID + '/keys/' + keyID).then(function() {
+      toast('Key revoked');
+      loadKeys();
+    }).catch(function(e) { toast('Error: ' + e.message); });
+  }
+
+  // ── Toast ──────────────────────────────────────────────────────────────────
+  var toastTimer;
+  function toast(msg) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function() { el.classList.remove('show'); }, 3000);
+  }
+
+  // Enter key submits secret form
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && document.getElementById('auth-gate').style.display !== 'none') {
+      saveSecret();
+    }
+  });
+</script>
+</body>
+</html>
