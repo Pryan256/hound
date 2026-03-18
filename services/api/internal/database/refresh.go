@@ -11,12 +11,13 @@ import (
 // ExpiringToken is a row from provider_tokens joined with its item,
 // returned by GetExpiringTokens for the refresher to process.
 type ExpiringToken struct {
-	ItemID           uuid.UUID
-	Provider         string
-	InstitutionID    string
-	EncAccessToken   string
-	EncRefreshToken  string // may be empty — provider doesn't issue refresh tokens
-	ExpiresAt        *time.Time
+	ItemID          uuid.UUID
+	ApplicationID   uuid.UUID
+	Provider        string
+	InstitutionID   string
+	EncAccessToken  string
+	EncRefreshToken string // may be empty — provider doesn't issue refresh tokens
+	ExpiresAt       *time.Time
 }
 
 // GetExpiringTokens returns active items whose access tokens expire within
@@ -26,7 +27,7 @@ func (db *DB) GetExpiringTokens(ctx context.Context, within time.Duration) ([]Ex
 	cutoff := time.Now().UTC().Add(within)
 
 	rows, err := db.pool.Query(ctx,
-		`SELECT pt.item_id, i.provider, i.institution_id,
+		`SELECT pt.item_id, i.application_id, i.provider, i.institution_id,
 		        pt.access_token, COALESCE(pt.refresh_token, ''), pt.expires_at
 		 FROM provider_tokens pt
 		 JOIN items i ON i.id = pt.item_id
@@ -46,7 +47,7 @@ func (db *DB) GetExpiringTokens(ctx context.Context, within time.Duration) ([]Ex
 	tokens := make([]ExpiringToken, 0)
 	for rows.Next() {
 		var t ExpiringToken
-		if err := rows.Scan(&t.ItemID, &t.Provider, &t.InstitutionID,
+		if err := rows.Scan(&t.ItemID, &t.ApplicationID, &t.Provider, &t.InstitutionID,
 			&t.EncAccessToken, &t.EncRefreshToken, &t.ExpiresAt); err != nil {
 			return nil, err
 		}

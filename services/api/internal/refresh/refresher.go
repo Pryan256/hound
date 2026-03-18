@@ -13,6 +13,7 @@ import (
 	"github.com/hound-fi/api/internal/database"
 	"github.com/hound-fi/api/internal/encryption"
 	"github.com/hound-fi/api/internal/models"
+	"github.com/hound-fi/api/internal/webhook"
 	"go.uber.org/zap"
 )
 
@@ -31,17 +32,19 @@ type Refresher struct {
 	agg      *aggregator.Router
 	enc      *encryption.Encryptor
 	log      *zap.Logger
+	webhooks *webhook.Dispatcher
 	interval time.Duration
 	ahead    time.Duration
 }
 
 // New creates a Refresher with default timing parameters.
-func New(db *database.DB, agg *aggregator.Router, enc *encryption.Encryptor, log *zap.Logger) *Refresher {
+func New(db *database.DB, agg *aggregator.Router, enc *encryption.Encryptor, log *zap.Logger, webhooks *webhook.Dispatcher) *Refresher {
 	return &Refresher{
 		db:       db,
 		agg:      agg,
 		enc:      enc,
 		log:      log,
+		webhooks: webhooks,
 		interval: defaultInterval,
 		ahead:    defaultAhead,
 	}
@@ -92,9 +95,18 @@ func (r *Refresher) run(ctx context.Context) {
 				zap.String("provider", t.Provider),
 				zap.Error(err),
 			)
-			// Mark the item as errored so the developer can surface it to the user
+			// Mark the item as errored so the developer can surface it to the user.
 			if markErr := r.db.MarkItemError(ctx, t.ItemID, err.Error()); markErr != nil {
 				r.log.Error("refresher: failed to mark item error", zap.Error(markErr))
+			}
+			// Fire ITEM_ERROR webhook so the developer can prompt re-auth.
+			if r.webhooks != nil {
+				go r.webhooks.Fire(ctx, t.ApplicationID, "ITEM_ERROR", map[string]any{
+					"webhook_type": "ITEM",
+					"webhook_code": "ERROR",
+					"item_id":      t.ItemID,
+					"error":        err.Error(),
+				})
 			}
 		}
 	}

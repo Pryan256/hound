@@ -97,6 +97,16 @@ func (h *Handler) GetTransactions(w http.ResponseWriter, r *http.Request) {
 		h.log.Error("failed to persist transactions", zap.String("item_id", item.ID.String()), zap.Error(err))
 	}
 
+	// Fire TRANSACTIONS_SYNC webhook if new transactions were persisted.
+	if h.webhooks != nil && len(persisted) > 0 {
+		go h.webhooks.Fire(r.Context(), appID, "TRANSACTIONS_SYNC", map[string]any{
+			"webhook_type":     "TRANSACTIONS",
+			"webhook_code":     "SYNC_UPDATES_AVAILABLE",
+			"item_id":          item.ID,
+			"new_transactions": len(persisted),
+		})
+	}
+
 	// Return persisted transactions if available, otherwise fall back to provider data.
 	txns := result.Transactions
 	total := result.TotalCount

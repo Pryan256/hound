@@ -10,24 +10,26 @@ import (
 	"github.com/hound-fi/api/internal/database"
 	"github.com/hound-fi/api/internal/encryption"
 	"github.com/hound-fi/api/internal/models"
+	"github.com/hound-fi/api/internal/webhook"
 	"go.uber.org/zap"
 )
 
 type Handler struct {
-	db  *database.DB
-	agg *aggregator.Router
-	log *zap.Logger
-	cfg *config.Config
-	enc *encryption.Encryptor
+	db       *database.DB
+	agg      *aggregator.Router
+	log      *zap.Logger
+	cfg      *config.Config
+	enc      *encryption.Encryptor
+	webhooks *webhook.Dispatcher
 }
 
-func New(db *database.DB, agg *aggregator.Router, log *zap.Logger, cfg *config.Config) *Handler {
+func New(db *database.DB, agg *aggregator.Router, log *zap.Logger, cfg *config.Config, webhooks *webhook.Dispatcher) *Handler {
 	enc, err := encryption.New(cfg.EncryptionKey)
 	if err != nil {
 		// EncryptionKey is validated at startup; panic here is intentional
 		panic(fmt.Sprintf("failed to init encryptor: %v", err))
 	}
-	return &Handler{db: db, agg: agg, log: log, cfg: cfg, enc: enc}
+	return &Handler{db: db, agg: agg, log: log, cfg: cfg, enc: enc, webhooks: webhooks}
 }
 
 // decryptItem replaces item.ProviderItemID with the decrypted access token so

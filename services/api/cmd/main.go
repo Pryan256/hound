@@ -17,6 +17,7 @@ import (
 	"github.com/hound-fi/api/internal/encryption"
 	"github.com/hound-fi/api/internal/refresh"
 	"github.com/hound-fi/api/internal/server"
+	"github.com/hound-fi/api/internal/webhook"
 	"go.uber.org/zap"
 )
 
@@ -58,7 +59,10 @@ func main() {
 		log.Fatal("failed to init encryptor", zap.Error(err))
 	}
 
-	srv := server.New(cfg, db, agg, log)
+	// Webhook dispatcher — shared by the HTTP server and the token refresher.
+	webhooks := webhook.New(db, enc, log)
+
+	srv := server.New(cfg, db, agg, webhooks, log)
 
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -72,8 +76,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Start the token refresher in the background.
-	go refresh.New(db, agg, enc, log).Start(ctx)
+	// Start background jobs.
+	go webhooks.Start(ctx)
+	go refresh.New(db, agg, enc, log, webhooks).Start(ctx)
 
 	// Start HTTP server.
 	go func() {

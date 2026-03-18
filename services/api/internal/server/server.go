@@ -11,12 +11,13 @@ import (
 	"github.com/hound-fi/api/internal/database"
 	"github.com/hound-fi/api/internal/handlers"
 	"github.com/hound-fi/api/internal/middleware"
+	"github.com/hound-fi/api/internal/webhook"
 	"go.uber.org/zap"
 )
 
-// New builds the HTTP router. The aggregator router is constructed in main so it
-// can be shared with the token refresher background job.
-func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, log *zap.Logger) http.Handler {
+// New builds the HTTP router. The aggregator router and webhook dispatcher are
+// constructed in main so they can be shared with background jobs.
+func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, webhooks *webhook.Dispatcher, log *zap.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// Global middleware
@@ -32,7 +33,7 @@ func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, log *zap.L
 	}))
 
 	// Handlers
-	h := handlers.New(db, agg, log, cfg)
+	h := handlers.New(db, agg, log, cfg, webhooks)
 
 	// Health check (no auth)
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +97,11 @@ func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, log *zap.L
 		r.Get("/accounts/balance", h.GetAccountBalance)
 		r.Get("/transactions", h.GetTransactions)
 		r.Get("/identity", h.GetIdentity)
+
+		// Webhooks
+		r.Post("/webhooks", h.RegisterWebhook)
+		r.Get("/webhooks", h.ListWebhooks)
+		r.Delete("/webhooks/{webhookID}", h.DeleteWebhook)
 	})
 
 	return r
