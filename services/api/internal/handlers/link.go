@@ -49,7 +49,12 @@ func (h *Handler) CreateLinkToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, expiry, err := h.db.CreateLinkToken(r.Context(), appID, req.UserID, req.Products, env)
+	products := req.Products
+	if products == nil {
+		products = []string{}
+	}
+
+	token, expiry, err := h.db.CreateLinkToken(r.Context(), appID, req.UserID, products, env)
 	if err != nil {
 		h.log.Error("failed to create link token", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create link token")
