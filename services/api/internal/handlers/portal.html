@@ -271,12 +271,29 @@
   <div id="auth-gate" class="card" style="display:none">
     <div class="card-title">Admin Access</div>
     <p>Enter your <strong>ADMIN_SECRET</strong> to manage applications and API keys.</p>
-    <div class="form-row" style="flex-direction:column">
+
+    <div style="display:flex;flex-direction:column;gap:12px">
       <div class="field">
         <label>Admin Secret</label>
         <input type="password" id="secret-input" placeholder="Enter admin secret…" />
       </div>
-      <button class="btn btn-primary" onclick="saveSecret()">Continue</button>
+
+      <!-- Generated secret reveal -->
+      <div id="generated-secret-banner" style="display:none;background:rgba(108,99,255,0.08);border:1px solid rgba(108,99,255,0.3);border-radius:8px;padding:14px;display:none">
+        <p style="font-size:13px;color:var(--muted);margin-bottom:10px;line-height:1.5">
+          &#9888;&#65039; Copy this and add it to your <code style="background:var(--bg);padding:1px 6px;border-radius:3px;font-size:12px">.env</code>, then restart. It won't be shown again.
+        </p>
+        <div style="font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;color:var(--accent);word-break:break-all;margin-bottom:10px;line-height:1.6" id="generated-secret-value"></div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="copyGeneratedSecret()" id="copy-secret-btn">Copy to clipboard</button>
+          <span style="font-size:12px;color:var(--muted);font-family:'SF Mono','Fira Code',monospace">ADMIN_SECRET=&lt;value above&gt;</span>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost" style="flex:1" onclick="generateSecret()">Generate new secret</button>
+        <button class="btn btn-primary" style="flex:2" onclick="saveSecret()">Continue</button>
+      </div>
     </div>
   </div>
 
@@ -359,6 +376,23 @@
       document.getElementById('auth-gate').style.display = 'block';
     }
   };
+
+  function generateSecret() {
+    var arr = new Uint8Array(32);
+    crypto.getRandomValues(arr);
+    var hex = Array.from(arr).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+    document.getElementById('secret-input').value = hex;
+    document.getElementById('secret-input').type = 'text';
+    document.getElementById('generated-secret-value').textContent = hex;
+    var banner = document.getElementById('generated-secret-banner');
+    banner.style.setProperty('display', 'block', 'important');
+    document.getElementById('copy-secret-btn').textContent = 'Copy to clipboard';
+  }
+
+  function copyGeneratedSecret() {
+    var val = document.getElementById('generated-secret-value').textContent;
+    navigator.clipboard.writeText(val).then(function() { toast('Copied — paste it into your .env file'); });
+  }
 
   function saveSecret() {
     var val = document.getElementById('secret-input').value.trim();

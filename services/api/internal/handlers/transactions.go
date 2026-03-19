@@ -1,14 +1,55 @@
 package handlers
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hound-fi/api/internal/database"
 	"github.com/hound-fi/api/internal/middleware"
+	"github.com/hound-fi/api/internal/models"
 	"go.uber.org/zap"
 )
+
+// txnCursorPayload is the JSON structure encoded inside a pagination cursor.
+type txnCursorPayload struct {
+	D string `json:"d"` // date: YYYY-MM-DD
+	I string `json:"i"` // transaction UUID
+}
+
+func encodeCursor(cp *database.CursorPoint) string {
+	if cp == nil {
+		return ""
+	}
+	b, _ := json.Marshal(txnCursorPayload{
+		D: cp.Date.Format("2006-01-02"),
+		I: cp.ID.String(),
+	})
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func decodeCursor(s string) (*database.CursorPoint, error) {
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, err
+	}
+	var p txnCursorPayload
+	if err := json.Unmarshal(b, &p); err != nil {
+		return nil, err
+	}
+	date, err := time.Parse("2006-01-02", p.D)
+	if err != nil {
+		return nil, err
+	}
+	id, err := uuid.Parse(p.I)
+	if err != nil {
+		return nil, err
+	}
+	return &database.CursorPoint{Date: date, ID: id}, nil
+}
 
 func (h *Handler) GetTransactions(w http.ResponseWriter, r *http.Request) {
 	appID, _ := r.Context().Value(middleware.ContextKeyApplicationID).(uuid.UUID)
@@ -20,13 +61,13 @@ func (h *Handler) GetTransactions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse query params
+	// ── Parse query params ────────────────────────────────────────────────────
+
 	q := r.URL.Query()
 
-	// Default: last 7 years. Wide enough to cover sandbox data (e.g. Mikomo: 2019-2020).
-	startDate := time.Now().UTC().AddDate(-7, 0, 0)
+	// Default window: last 90 days.
+	startDate := time.Now().UTC().AddDate(0, -3, 0)
 	endDate := time.Now().UTC()
-
 	if s := q.Get("start_date"); s != "" {
 		if t, err := time.Parse("2006-01-02", s); err == nil {
 			startDate = t
@@ -39,16 +80,23 @@ func (h *Handler) GetTransactions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	count := 100
-	if q.Get("count") != "" {
-		count, _ = strconv.Atoi(q.Get("count"))
-		if count > 500 {
-			count = 500
+	if c := q.Get("count"); c != "" {
+		if n, err := strconv.Atoi(c); err == nil && n > 0 {
+			count = n
 		}
 	}
+	if count > 500 {
+		count = 500
+	}
 
-	offset := 0
-	if q.Get("offset") != "" {
-		offset, _ = strconv.Atoi(q.Get("offset"))
+	// cursor is nil on the first page; populated on subsequent pages.
+	var cursor *database.CursorPoint
+	if raw := q.Get("cursor"); raw != "" {
+		cursor, err = decodeCursor(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_CURSOR", "cursor is malformed or expired")
+			return
+		}
 	}
 
 	if err := h.decryptItem(item); err != nil {
@@ -57,77 +105,88 @@ func (h *Handler) GetTransactions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch fresh data from the provider.
-	result, err := h.agg.GetTransactions(r.Context(), item, startDate, endDate, count, offset)
+	// ── Sync from provider on the first page only ─────────────────────────────
+	//
+	// Subsequent pages (cursor present) skip the provider call — the data was
+	// already synced on page 1 and is now served entirely from the DB.
+
+	var dbAccounts []models.Account
+	dbAccounts, _ = h.db.GetAccountsByItemID(r.Context(), item.ID)
+
+	if cursor == nil {
+		// First page: pull fresh data from the provider and upsert into DB.
+		result, provErr := h.agg.GetTransactions(r.Context(), item, startDate, endDate, 0, 0)
+		if provErr != nil {
+			h.log.Error("failed to fetch transactions from provider",
+				zap.String("item_id", item.ID.String()), zap.Error(provErr))
+			writeError(w, http.StatusBadGateway, "PROVIDER_ERROR",
+				"failed to fetch transactions from institution")
+			return
+		}
+
+		// Ensure accounts exist in DB (needed to link transactions).
+		if len(dbAccounts) == 0 {
+			dbAccounts, _ = h.db.UpsertAccounts(r.Context(), item.ID, result.Accounts)
+		}
+
+		// Build provider_account_id → DB UUID map from both DB accounts and
+		// the accounts the provider returned inline (e.g. Akoya's TransactionsResponse).
+		providerToUUID := make(map[string]uuid.UUID, len(dbAccounts))
+		for _, a := range dbAccounts {
+			providerToUUID[a.ProviderAccountID] = a.ID
+		}
+		for _, a := range result.Accounts {
+			if _, already := providerToUUID[a.ProviderAccountID]; !already {
+				// provider account not yet in DB — skip (upsert above should have caught it)
+				continue
+			}
+			providerToUUID[a.ProviderAccountID] = providerToUUID[a.ProviderAccountID]
+		}
+
+		persisted, upsertErr := h.db.UpsertTransactions(r.Context(), providerToUUID, result.Transactions)
+		if upsertErr != nil {
+			h.log.Error("failed to persist transactions",
+				zap.String("item_id", item.ID.String()), zap.Error(upsertErr))
+		}
+
+		// Fire TRANSACTIONS_SYNC webhook if new/updated transactions were written.
+		if h.webhooks != nil && len(persisted) > 0 {
+			go h.webhooks.Fire(r.Context(), appID, "TRANSACTIONS_SYNC", map[string]any{
+				"webhook_type":     "TRANSACTIONS",
+				"webhook_code":     "SYNC_UPDATES_AVAILABLE",
+				"item_id":          item.ID,
+				"new_transactions": len(persisted),
+			})
+		}
+	}
+
+	// ── Read from DB with keyset pagination ───────────────────────────────────
+
+	txns, total, nextCursor, err := h.db.GetTransactionsByItemIDCursor(
+		r.Context(), item.ID, startDate, endDate, count, cursor)
 	if err != nil {
-		h.log.Error("failed to fetch transactions", zap.String("item_id", item.ID.String()), zap.Error(err))
-		writeError(w, http.StatusBadGateway, "PROVIDER_ERROR", "failed to fetch transactions from institution")
+		h.log.Error("failed to read transactions from db",
+			zap.String("item_id", item.ID.String()), zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to retrieve transactions")
 		return
 	}
-
-	// Get persisted accounts (with real UUIDs) to link transactions correctly.
-	dbAccounts, err := h.db.GetAccountsByItemID(r.Context(), item.ID)
-	if err != nil || len(dbAccounts) == 0 {
-		// Accounts not persisted yet — fetch and persist them first.
-		fetched, fetchErr := h.agg.GetAccounts(r.Context(), item)
-		if fetchErr == nil {
-			dbAccounts, _ = h.db.UpsertAccounts(r.Context(), item.ID, fetched)
-		}
+	if txns == nil {
+		txns = []models.Transaction{}
 	}
 
-	// Build provider_account_id → DB UUID map.
-	accountUUIDs := make(map[string]uuid.UUID, len(dbAccounts))
-	for _, a := range dbAccounts {
-		accountUUIDs[a.ProviderAccountID] = a.ID
-	}
+	// ── Build response ────────────────────────────────────────────────────────
 
-	// Build provider_account_id → DB UUID map using aggregator result accounts.
-	// The Akoya client populates result.Accounts so each transaction's ProviderAccountID
-	// can be resolved to a real DB UUID here before upsert.
-	providerToUUID := make(map[string]uuid.UUID)
-	for _, a := range result.Accounts {
-		if dbUUID, ok := accountUUIDs[a.ProviderAccountID]; ok {
-			providerToUUID[a.ProviderAccountID] = dbUUID
-		}
-	}
-
-	// Persist transactions.
-	persisted, err := h.db.UpsertTransactions(r.Context(), providerToUUID, result.Transactions)
-	if err != nil {
-		h.log.Error("failed to persist transactions", zap.String("item_id", item.ID.String()), zap.Error(err))
-	}
-
-	// Fire TRANSACTIONS_SYNC webhook if new transactions were persisted.
-	if h.webhooks != nil && len(persisted) > 0 {
-		go h.webhooks.Fire(r.Context(), appID, "TRANSACTIONS_SYNC", map[string]any{
-			"webhook_type":     "TRANSACTIONS",
-			"webhook_code":     "SYNC_UPDATES_AVAILABLE",
-			"item_id":          item.ID,
-			"new_transactions": len(persisted),
-		})
-	}
-
-	// Return persisted transactions if available, otherwise fall back to provider data.
-	txns := result.Transactions
-	total := result.TotalCount
-	if len(persisted) > 0 {
-		txns = persisted
-		total = len(persisted)
-	}
-
-	// Return DB accounts (with real UUIDs) if available.
-	returnAccounts := result.Accounts
-	if len(dbAccounts) > 0 {
-		returnAccounts = dbAccounts
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"accounts":           returnAccounts,
+	resp := map[string]any{
+		"accounts":           dbAccounts,
 		"transactions":       txns,
 		"total_transactions": total,
+		"has_more":           nextCursor != nil,
+		"next_cursor":        encodeCursor(nextCursor), // "" when no more pages
 		"item":               item,
 		"request_id":         r.Header.Get("X-Request-ID"),
-	})
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) GetIdentity(w http.ResponseWriter, r *http.Request) {

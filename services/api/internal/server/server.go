@@ -11,13 +11,14 @@ import (
 	"github.com/hound-fi/api/internal/database"
 	"github.com/hound-fi/api/internal/handlers"
 	"github.com/hound-fi/api/internal/middleware"
+	"github.com/hound-fi/api/internal/ratelimit"
 	"github.com/hound-fi/api/internal/webhook"
 	"go.uber.org/zap"
 )
 
 // New builds the HTTP router. The aggregator router and webhook dispatcher are
 // constructed in main so they can be shared with background jobs.
-func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, webhooks *webhook.Dispatcher, log *zap.Logger) http.Handler {
+func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, webhooks *webhook.Dispatcher, limiter *ratelimit.Limiter, log *zap.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// Global middleware
@@ -81,6 +82,9 @@ func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, webhooks *
 	// v1 API — all routes require API key auth (server-side only)
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(db, log))
+		if limiter != nil {
+			r.Use(middleware.RateLimit(limiter, log))
+		}
 
 		// Link token (initiates a Link session)
 		r.Post("/link/token/create", h.CreateLinkToken)
@@ -102,6 +106,10 @@ func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, webhooks *
 		r.Post("/webhooks", h.RegisterWebhook)
 		r.Get("/webhooks", h.ListWebhooks)
 		r.Delete("/webhooks/{webhookID}", h.DeleteWebhook)
+
+		// Sandbox control (test keys only — handlers enforce env=test)
+		r.Post("/sandbox/item/fire_webhook", h.SandboxFireWebhook)
+		r.Post("/sandbox/item/reset_login", h.SandboxResetLogin)
 	})
 
 	return r

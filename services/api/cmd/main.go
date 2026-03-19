@@ -12,9 +12,11 @@ import (
 	"github.com/hound-fi/api/internal/aggregator"
 	"github.com/hound-fi/api/internal/aggregator/akoya"
 	"github.com/hound-fi/api/internal/aggregator/finicity"
+	"github.com/hound-fi/api/internal/aggregator/sandbox"
 	"github.com/hound-fi/api/internal/config"
 	"github.com/hound-fi/api/internal/database"
 	"github.com/hound-fi/api/internal/encryption"
+	"github.com/hound-fi/api/internal/ratelimit"
 	"github.com/hound-fi/api/internal/refresh"
 	"github.com/hound-fi/api/internal/server"
 	"github.com/hound-fi/api/internal/webhook"
@@ -48,7 +50,9 @@ func main() {
 	}
 
 	// Build the aggregator router once — shared by the HTTP server and the refresher.
+	// Sandbox is always registered; it only activates for ins_sandbox institutions.
 	agg := aggregator.NewRouterWithLogger(log,
+		sandbox.New(),
 		akoya.New(cfg.Akoya),
 		finicity.New(cfg.Finicity),
 	)
@@ -62,7 +66,17 @@ func main() {
 	// Webhook dispatcher — shared by the HTTP server and the token refresher.
 	webhooks := webhook.New(db, enc, log)
 
-	srv := server.New(cfg, db, agg, webhooks, log)
+	// Rate limiter — Redis-backed fixed-window, fails open if Redis is down.
+	limiter, err := ratelimit.New(cfg.RedisURL)
+	if err != nil {
+		log.Warn("rate limiter unavailable, proceeding without rate limiting", zap.Error(err))
+		limiter = nil
+	}
+	if limiter != nil {
+		defer limiter.Close()
+	}
+
+	srv := server.New(cfg, db, agg, webhooks, limiter, log)
 
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.Port,

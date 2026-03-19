@@ -158,42 +158,83 @@ func (db *DB) UpsertTransactions(
 	return result, nil
 }
 
-// GetTransactionsByItemID returns paginated transactions for all accounts under
-// an item within [start, end].
-func (db *DB) GetTransactionsByItemID(
+// CursorPoint encodes a position in a keyset-paginated transaction result.
+// It holds the (date, id) of the last row on the previous page.
+type CursorPoint struct {
+	Date time.Time
+	ID   uuid.UUID
+}
+
+// GetTransactionsByItemIDCursor returns transactions for an item using keyset
+// pagination ordered by (date DESC, id DESC).
+//
+//   - cursor == nil  → first page, starts from the newest transaction in the window
+//   - cursor != nil  → continues after the given (date, id) position
+//
+// Returns the matching transactions, the total count of rows in the window
+// (for X-Total-Count / UI display), and the cursor to pass for the next page
+// (nil when there are no more rows).
+func (db *DB) GetTransactionsByItemIDCursor(
 	ctx context.Context,
 	itemID uuid.UUID,
 	start, end time.Time,
-	limit, offset int,
-) ([]models.Transaction, int, error) {
-	// Count
+	limit int,
+	cursor *CursorPoint,
+) ([]models.Transaction, int, *CursorPoint, error) {
+	startStr := start.Format("2006-01-02")
+	endStr := end.Format("2006-01-02")
+
+	// Total count in the window — used for has_more / UI display.
+	// TimescaleDB prunes chunks on the date predicate so this is fast.
 	var total int
-	err := db.pool.QueryRow(ctx, `
+	if err := db.pool.QueryRow(ctx, `
 		SELECT COUNT(*)
 		FROM transactions t
 		JOIN accounts a ON a.id = t.account_id
 		WHERE a.item_id = $1
 		  AND t.date BETWEEN $2 AND $3
-	`, itemID, start.Format("2006-01-02"), end.Format("2006-01-02")).Scan(&total)
-	if err != nil {
-		return nil, 0, fmt.Errorf("count transactions: %w", err)
+	`, itemID, startStr, endStr).Scan(&total); err != nil {
+		return nil, 0, nil, fmt.Errorf("count transactions: %w", err)
 	}
 
-	rows, err := db.pool.Query(ctx, `
-		SELECT t.id, t.account_id, COALESCE(t.provider_transaction_id,''),
-		       t.amount, t.currency, t.date,
-		       t.name, COALESCE(t.merchant_name,''), COALESCE(t.category,'{}'),
-		       COALESCE(t.category_id,''), t.pending,
-		       COALESCE(t.payment_channel,''), t.created_at
-		FROM transactions t
-		JOIN accounts a ON a.id = t.account_id
-		WHERE a.item_id = $1
-		  AND t.date BETWEEN $2 AND $3
-		ORDER BY t.date DESC
-		LIMIT $4 OFFSET $5
-	`, itemID, start.Format("2006-01-02"), end.Format("2006-01-02"), limit, offset)
+	// Build the keyset predicate — avoids scanning rows we've already returned.
+	var rows pgxRows
+	var err error
+	if cursor == nil {
+		rows, err = db.pool.Query(ctx, `
+			SELECT t.id, t.account_id, COALESCE(t.provider_transaction_id,''),
+			       t.amount, t.currency, t.date,
+			       t.name, COALESCE(t.merchant_name,''), COALESCE(t.category,'{}'),
+			       COALESCE(t.category_id,''), t.pending,
+			       COALESCE(t.payment_channel,''), t.created_at
+			FROM transactions t
+			JOIN accounts a ON a.id = t.account_id
+			WHERE a.item_id = $1
+			  AND t.date BETWEEN $2 AND $3
+			ORDER BY t.date DESC, t.id DESC
+			LIMIT $4
+		`, itemID, startStr, endStr, limit)
+	} else {
+		// Keyset condition for ORDER BY date DESC, id DESC:
+		//   next row satisfies (date < cursor.date) OR (date = cursor.date AND id < cursor.id)
+		rows, err = db.pool.Query(ctx, `
+			SELECT t.id, t.account_id, COALESCE(t.provider_transaction_id,''),
+			       t.amount, t.currency, t.date,
+			       t.name, COALESCE(t.merchant_name,''), COALESCE(t.category,'{}'),
+			       COALESCE(t.category_id,''), t.pending,
+			       COALESCE(t.payment_channel,''), t.created_at
+			FROM transactions t
+			JOIN accounts a ON a.id = t.account_id
+			WHERE a.item_id = $1
+			  AND t.date BETWEEN $2 AND $3
+			  AND (t.date < $4 OR (t.date = $4 AND t.id < $5))
+			ORDER BY t.date DESC, t.id DESC
+			LIMIT $6
+		`, itemID, startStr, endStr,
+			cursor.Date.Format("2006-01-02"), cursor.ID, limit)
+	}
 	if err != nil {
-		return nil, 0, fmt.Errorf("get transactions: %w", err)
+		return nil, 0, nil, fmt.Errorf("get transactions: %w", err)
 	}
 	defer rows.Close()
 
@@ -207,11 +248,32 @@ func (db *DB) GetTransactionsByItemID(
 			&t.CategoryID, &t.Pending,
 			&t.PaymentChannel, &t.CreatedAt,
 		); err != nil {
-			return nil, 0, fmt.Errorf("scan transaction: %w", err)
+			return nil, 0, nil, fmt.Errorf("scan transaction: %w", err)
 		}
 		txns = append(txns, t)
 	}
-	return txns, total, nil
+	if err := rows.Err(); err != nil {
+		return nil, 0, nil, err
+	}
+
+	// If we got a full page there may be more — build the next cursor from the
+	// last row returned.
+	var nextCursor *CursorPoint
+	if len(txns) == limit {
+		last := txns[len(txns)-1]
+		nextCursor = &CursorPoint{Date: last.Date, ID: last.ID}
+	}
+
+	return txns, total, nextCursor, nil
+}
+
+// pgxRows is the subset of pgx.Rows used here, kept as a local alias so the
+// two query branches share a single scan loop without importing pgx directly.
+type pgxRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Close()
+	Err() error
 }
 
 // nullableString returns nil for empty strings so Postgres stores NULL rather
