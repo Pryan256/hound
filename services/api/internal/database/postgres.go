@@ -103,6 +103,26 @@ func (db *DB) CreateLinkToken(ctx context.Context, appID uuid.UUID, userID strin
 	return token, expiry, nil
 }
 
+// CreateRelinkToken issues a link token scoped to an existing item.
+// When this token is used to complete an OAuth flow, the existing item's
+// provider tokens are replaced and its status is restored to active rather
+// than a new item being created.
+func (db *DB) CreateRelinkToken(ctx context.Context, appID uuid.UUID, userID string, itemID uuid.UUID, env string) (string, time.Time, error) {
+	token := "link-" + generateToken(32)
+	expiry := time.Now().UTC().Add(30 * time.Minute)
+
+	_, err := db.pool.Exec(ctx,
+		`INSERT INTO link_tokens (token, application_id, user_id, products, env, expires_at, relink_item_id)
+		 VALUES ($1, $2, $3, '{"transactions","identity"}', $4, $5, $6)`,
+		token, appID, userID, env, expiry, itemID,
+	)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("create relink token: %w", err)
+	}
+
+	return token, expiry, nil
+}
+
 func (db *DB) ExchangePublicToken(ctx context.Context, appID uuid.UUID, publicToken string) (*models.Item, string, error) {
 	// Look up the completed Link session by public token
 	var item models.Item

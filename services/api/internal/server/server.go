@@ -89,6 +89,9 @@ func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, webhooks *
 		// Link token (initiates a Link session)
 		r.Post("/link/token/create", h.CreateLinkToken)
 
+		// Relink token (re-authenticates an errored item)
+		r.Post("/item/relink/token", h.CreateRelinkToken)
+
 		// Exchange public token for access token after Link completes
 		r.Post("/item/public_token/exchange", h.ExchangePublicToken)
 

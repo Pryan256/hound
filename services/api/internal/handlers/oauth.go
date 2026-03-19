@@ -155,18 +155,34 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Create Item, store tokens, issue public_token
-	_, publicToken, err := h.db.CreateItemFromOAuth(
-		r.Context(), session, encAccessToken, encRefreshToken, token.ExpiresAt)
-	if err != nil {
-		h.log.Error("failed to create item", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to complete connection")
-		return
+	// Create or update item depending on whether this is an initial link or a relink.
+	var publicToken string
+	if session.RelinkItemID != nil {
+		// Relink — update existing item's tokens, restore status to active.
+		_, publicToken, err = h.db.UpdateItemFromOAuth(
+			r.Context(), session, *session.RelinkItemID, encAccessToken, encRefreshToken, token.ExpiresAt)
+		if err != nil {
+			h.log.Error("failed to update item for relink", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to complete re-authentication")
+			return
+		}
+		h.log.Info("item re-authenticated via oauth",
+			zap.String("item_id", session.RelinkItemID.String()),
+			zap.String("institution", session.InstitutionID),
+			zap.String("provider", provider.Name()))
+	} else {
+		// Initial link — create a new item.
+		_, publicToken, err = h.db.CreateItemFromOAuth(
+			r.Context(), session, encAccessToken, encRefreshToken, token.ExpiresAt)
+		if err != nil {
+			h.log.Error("failed to create item", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to complete connection")
+			return
+		}
+		h.log.Info("item created via oauth",
+			zap.String("institution", session.InstitutionID),
+			zap.String("provider", provider.Name()))
 	}
-
-	h.log.Info("item created via oauth",
-		zap.String("institution", session.InstitutionID),
-		zap.String("provider", provider.Name()))
 
 	writeJSON(w, http.StatusOK, callbackResponse{
 		PublicToken: publicToken,
