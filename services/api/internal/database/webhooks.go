@@ -189,24 +189,25 @@ var retryDelays = []time.Duration{
 
 // ScheduleRetry increments the attempt counter and schedules a future retry.
 // After maxAttempts it calls MarkPermFailed instead.
-func (db *DB) ScheduleRetry(ctx context.Context, deliveryID uuid.UUID, httpStatus int, errMsg string) error {
+// Returns (true, nil) when the delivery was permanently failed (max retries exhausted).
+func (db *DB) ScheduleRetry(ctx context.Context, deliveryID uuid.UUID, httpStatus int, errMsg string) (permFailed bool, err error) {
 	// Read current attempt count
 	var attempts int
 	db.pool.QueryRow(ctx, `SELECT attempts FROM webhook_deliveries WHERE id = $1`, deliveryID).Scan(&attempts)
 
 	if attempts >= len(retryDelays) {
-		return db.MarkPermFailed(ctx, deliveryID, errMsg)
+		return true, db.MarkPermFailed(ctx, deliveryID, errMsg)
 	}
 
 	nextAttempt := time.Now().UTC().Add(retryDelays[attempts])
-	_, err := db.pool.Exec(ctx,
+	_, err = db.pool.Exec(ctx,
 		`UPDATE webhook_deliveries
 		 SET attempts = attempts + 1, next_attempt_at = $2,
 		     last_http_status = $3, last_error = $4
 		 WHERE id = $1`,
 		deliveryID, nextAttempt, httpStatus, errMsg,
 	)
-	return err
+	return false, err
 }
 
 // MarkPermFailed marks a delivery as permanently failed (max retries exhausted).

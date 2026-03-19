@@ -12,6 +12,7 @@ import (
 	"github.com/hound-fi/api/internal/aggregator"
 	"github.com/hound-fi/api/internal/database"
 	"github.com/hound-fi/api/internal/encryption"
+	"github.com/hound-fi/api/internal/metrics"
 	"github.com/hound-fi/api/internal/models"
 	"github.com/hound-fi/api/internal/webhook"
 	"go.uber.org/zap"
@@ -90,6 +91,7 @@ func (r *Refresher) run(ctx context.Context) {
 
 	for _, t := range expiring {
 		if err := r.refreshOne(ctx, t); err != nil {
+			metrics.TokenRefreshesTotal.WithLabelValues("error").Inc()
 			r.log.Error("refresher: failed to refresh token",
 				zap.String("item_id", t.ItemID.String()),
 				zap.String("provider", t.Provider),
@@ -132,6 +134,7 @@ func (r *Refresher) refreshOne(ctx context.Context, t database.ExpiringToken) er
 	if err != nil {
 		if errors.Is(err, aggregator.ErrRefreshNotSupported) {
 			// Provider doesn't use refresh tokens — nothing to do, not an error
+			metrics.TokenRefreshesTotal.WithLabelValues("unsupported").Inc()
 			return nil
 		}
 		return fmt.Errorf("provider refresh: %w", err)
@@ -157,6 +160,7 @@ func (r *Refresher) refreshOne(ctx context.Context, t database.ExpiringToken) er
 		return fmt.Errorf("store refreshed token: %w", err)
 	}
 
+	metrics.TokenRefreshesTotal.WithLabelValues("success").Inc()
 	r.log.Info("refresher: token refreshed",
 		zap.String("item_id", t.ItemID.String()),
 		zap.String("provider", t.Provider),

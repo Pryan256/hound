@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hound-fi/api/internal/database"
 	"github.com/hound-fi/api/internal/encryption"
+	"github.com/hound-fi/api/internal/metrics"
 	"go.uber.org/zap"
 )
 
@@ -178,18 +179,24 @@ func (d *Dispatcher) deliver(ctx context.Context, deliveryID uuid.UUID) {
 	req.Header.Set("Hound-Event", rec.EventType)
 	req.Header.Set("User-Agent", "Hound-Webhooks/1.0")
 
+	start := time.Now()
 	resp, err := d.http.Do(req)
+	duration := time.Since(start).Seconds()
+	metrics.WebhookDeliveryDuration.Observe(duration)
+
 	if err != nil {
 		d.log.Warn("webhook: delivery failed (network)",
 			zap.String("url", rec.WebhookURL),
 			zap.String("delivery_id", deliveryID.String()),
 			zap.Error(err))
+		metrics.WebhookDeliveriesTotal.WithLabelValues("retry").Inc()
 		d.scheduleRetry(ctx, deliveryID, 0, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		metrics.WebhookDeliveriesTotal.WithLabelValues("success").Inc()
 		d.db.MarkDelivered(ctx, deliveryID, resp.StatusCode)
 		d.log.Info("webhook: delivered",
 			zap.String("url", rec.WebhookURL),
@@ -204,12 +211,19 @@ func (d *Dispatcher) deliver(ctx context.Context, deliveryID uuid.UUID) {
 		zap.String("url", rec.WebhookURL),
 		zap.String("delivery_id", deliveryID.String()),
 		zap.Int("status", resp.StatusCode))
+	metrics.WebhookDeliveriesTotal.WithLabelValues("retry").Inc()
 	d.scheduleRetry(ctx, deliveryID, resp.StatusCode, msg)
 }
 
 func (d *Dispatcher) scheduleRetry(ctx context.Context, deliveryID uuid.UUID, status int, errMsg string) {
-	if err := d.db.ScheduleRetry(ctx, deliveryID, status, errMsg); err != nil {
+	permFailed, err := d.db.ScheduleRetry(ctx, deliveryID, status, errMsg)
+	if err != nil {
 		d.log.Error("webhook: failed to schedule retry", zap.Error(err))
+	}
+	if permFailed {
+		metrics.WebhookDeliveriesTotal.WithLabelValues("perm_failed").Inc()
+		d.log.Warn("webhook: delivery permanently failed",
+			zap.String("delivery_id", deliveryID.String()))
 	}
 }
 

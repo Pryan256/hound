@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hound-fi/api/internal/metrics"
 	"github.com/hound-fi/api/internal/ratelimit"
 	"go.uber.org/zap"
 )
@@ -32,6 +33,7 @@ func RateLimit(limiter *ratelimit.Limiter, log *zap.Logger) func(http.Handler) h
 			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(res.ResetAt.Unix(), 10))
 
 			if !res.Allowed {
+				metrics.RateLimitHitsTotal.WithLabelValues(env).Inc()
 				retryAfter := int(time.Until(res.ResetAt).Seconds())
 				if retryAfter < 1 {
 					retryAfter = 1

@@ -6,10 +6,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/hound-fi/api/internal/aggregator"
 	"github.com/hound-fi/api/internal/config"
 	"github.com/hound-fi/api/internal/database"
 	"github.com/hound-fi/api/internal/handlers"
+	_ "github.com/hound-fi/api/internal/metrics" // register metrics via init()
 	"github.com/hound-fi/api/internal/middleware"
 	"github.com/hound-fi/api/internal/ratelimit"
 	"github.com/hound-fi/api/internal/webhook"
@@ -26,6 +28,7 @@ func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, webhooks *
 	r.Use(chimiddleware.RealIP)
 	r.Use(middleware.Logger(log))
 	r.Use(chimiddleware.Recoverer)
+	r.Use(middleware.Metrics())
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{"https://*", "http://localhost:*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -41,6 +44,9 @@ func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, webhooks *
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
+
+	// Prometheus metrics (no auth — restrict at the network/ingress layer in production)
+	r.Get("/metrics", promhttp.Handler().ServeHTTP)
 
 	// Static assets — embed script (hound.js) and compiled Link widget
 	// Served from ./static/ on disk (populated by the Docker build stage).
