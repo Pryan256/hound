@@ -11,6 +11,7 @@ import (
 
 	"github.com/hound-fi/api/internal/aggregator"
 	"github.com/hound-fi/api/internal/aggregator/akoya"
+	"github.com/hound-fi/api/internal/aggregator/fdx"
 	"github.com/hound-fi/api/internal/aggregator/finicity"
 	"github.com/hound-fi/api/internal/aggregator/sandbox"
 	"github.com/hound-fi/api/internal/config"
@@ -50,8 +51,11 @@ func main() {
 	}
 
 	// Build the aggregator router once — shared by the HTTP server and the refresher.
+	// Providers are evaluated in order; the first one whose Supports() returns true wins.
+	// FDX is first: direct bank connections, CFPB 1033 sanctioned, zero per-item cost.
 	// Sandbox is always registered; it only activates for ins_sandbox institutions.
 	agg := aggregator.NewRouterWithLogger(log,
+		fdx.New(),           // Direct FDX connections — highest priority, zero per-item cost
 		sandbox.New(),
 		akoya.New(cfg.Akoya),
 		finicity.New(cfg.Finicity),

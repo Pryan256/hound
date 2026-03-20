@@ -81,7 +81,7 @@ func (r *Router) RefreshToken(ctx context.Context, item *models.Item, refreshTok
 	if err != nil {
 		return nil, err
 	}
-	return p.RefreshToken(ctx, refreshToken)
+	return p.RefreshToken(ctx, item, refreshToken)
 }
 
 // SelectProvider picks the best provider for a new institution connection.

@@ -18,46 +18,53 @@ type OAuthSession struct {
 	Provider      string
 	RedirectURI   string
 	RelinkItemID  *uuid.UUID // non-nil when this is a re-authentication of an existing item
+	CodeVerifier  string     // PKCE code verifier; empty for non-PKCE providers
 }
 
-// CreateOAuthSession records a pending OAuth session and returns the state token.
-// Called by the initiate handler before redirecting the user to the bank.
-func (db *DB) CreateOAuthSession(ctx context.Context, appID uuid.UUID, linkToken, institutionID, provider string) (state string, err error) {
-	state = "st_" + generateToken(24)
+// GenerateOAuthState generates a fresh, unpredictable state token for CSRF protection.
+// The caller should invoke this before calling GetAuthorizationURL so the state is
+// known before the redirect URL is built, then pass it to CreateOAuthSession.
+func GenerateOAuthState() string {
+	return "st_" + generateToken(24)
+}
+
+// CreateOAuthSession records a pending OAuth session using the provided state and
+// PKCE code verifier. Call GenerateOAuthState() first to obtain the state, then
+// call provider.GetAuthorizationURL() to obtain both the URL and codeVerifier,
+// then call this function.
+func (db *DB) CreateOAuthSession(ctx context.Context, appID uuid.UUID, linkToken, institutionID, provider, state, codeVerifier string) error {
 	stateExpiry := time.Now().UTC().Add(15 * time.Minute)
 
-	_, err = db.pool.Exec(ctx, `
-		INSERT INTO link_sessions (application_id, link_token, institution_id, provider, oauth_state, oauth_state_expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, appID, linkToken, institutionID, provider, state, stateExpiry)
+	_, err := db.pool.Exec(ctx, `
+		INSERT INTO link_sessions (application_id, link_token, institution_id, provider, oauth_state, oauth_state_expires_at, pkce_code_verifier)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, appID, linkToken, institutionID, provider, state, stateExpiry, codeVerifier)
 	if err != nil {
-		return "", fmt.Errorf("create oauth session: %w", err)
+		return fmt.Errorf("create oauth session: %w", err)
 	}
 
-	return state, nil
+	return nil
 }
 
 // ValidateOAuthState looks up the session by state token, confirms it hasn't expired,
 // and returns the session details. Consumes the state (one-time use).
 func (db *DB) ValidateOAuthState(ctx context.Context, state string) (*OAuthSession, error) {
 	var s OAuthSession
-	var linkToken string
 
 	err := db.pool.QueryRow(ctx, `
 		SELECT ls.id, ls.application_id, lt.user_id, lt.env, ls.institution_id, ls.provider,
-		       COALESCE(lt.redirect_uri, ''), lt.relink_item_id
+		       COALESCE(lt.redirect_uri, ''), lt.relink_item_id,
+		       COALESCE(ls.pkce_code_verifier, '')
 		FROM link_sessions ls
 		JOIN link_tokens lt ON lt.token = ls.link_token
 		WHERE ls.oauth_state = $1
 		  AND ls.oauth_state_expires_at > NOW()
 		  AND ls.item_id IS NULL
 	`, state).Scan(&s.ID, &s.ApplicationID, &s.UserID, &s.Env, &s.InstitutionID, &s.Provider,
-		&s.RedirectURI, &s.RelinkItemID)
+		&s.RedirectURI, &s.RelinkItemID, &s.CodeVerifier)
 	if err != nil {
 		return nil, fmt.Errorf("validate oauth state: %w", err)
 	}
-
-	_ = linkToken
 
 	// Expire the state immediately (single use) — best-effort, non-fatal.
 	_, _ = db.pool.Exec(ctx,

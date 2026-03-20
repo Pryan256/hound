@@ -148,16 +148,13 @@ func (c *Client) GetIdentity(ctx context.Context, item *models.Item) ([]models.A
 // The caller must have already provisioned a Finicity customer for this user
 // (see database.EnsureFinicityCustomer) and passed its ID via institutionID param.
 // In this adapter we expect institutionID to be "finicity:{customerId}" format.
-func (c *Client) GetAuthorizationURL(institutionID, state, redirectURI string) (string, error) {
-	// TODO: Call Finicity Generate Connect URL API
-	// POST /connect/v2/generate
-	// {customerId, partnerId, redirectUri, state, type: "lite"}
-	// Returns {link: "https://connect.finicity.com/..."}
-	//
-	// This is a server-side call (needs app token) so it can't be done purely
-	// client-side. The handler should call this via a separate method.
-	// For now, return a placeholder that the handler can detect.
-	return "", fmt.Errorf("finicity: GetAuthorizationURL requires async customer setup — use GenerateConnectURL instead")
+// GetAuthorizationURL is not used for Finicity's Connect flow — Finicity requires
+// a server-side API call to generate a Connect URL (see GenerateConnectURL).
+// codeVerifier is always "" since Finicity does not use PKCE.
+func (c *Client) GetAuthorizationURL(institutionID, state, redirectURI string) (authURL string, codeVerifier string, err error) {
+	// Finicity's Link flow goes through GenerateConnectURL (server-side POST).
+	// This method exists only to satisfy the Provider interface.
+	return "", "", fmt.Errorf("finicity: GetAuthorizationURL requires async customer setup — use GenerateConnectURL instead")
 }
 
 // GenerateConnectURL calls the Finicity API to create a Connect session URL.
@@ -202,13 +199,15 @@ func (c *Client) GenerateConnectURL(ctx context.Context, customerID, state, redi
 
 // ExchangeCode is a no-op for Finicity — they use webhook events or redirect params
 // to signal completion, not a standard OAuth code exchange.
-func (c *Client) ExchangeCode(_ context.Context, _, _, _ string) (*aggregator.ProviderToken, error) {
+// codeVerifier is accepted to satisfy the Provider interface but is unused.
+func (c *Client) ExchangeCode(_ context.Context, _, _, _, _ string) (*aggregator.ProviderToken, error) {
 	return nil, fmt.Errorf("finicity: use webhook or redirect callback — ExchangeCode not applicable")
 }
 
 // RefreshToken is not applicable to Finicity — they use short-lived app tokens
 // managed internally by appToken(), not per-user OAuth refresh tokens.
-func (c *Client) RefreshToken(_ context.Context, _ string) (*aggregator.ProviderToken, error) {
+// item is accepted to satisfy the Provider interface but is unused.
+func (c *Client) RefreshToken(_ context.Context, _ *models.Item, _ string) (*aggregator.ProviderToken, error) {
 	return nil, aggregator.ErrRefreshNotSupported
 }
 

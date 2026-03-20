@@ -129,7 +129,8 @@ func (c *Client) GetIdentity(ctx context.Context, item *models.Item) ([]models.A
 
 // GetAuthorizationURL builds the Akoya OAuth2 authorization URL.
 // Docs: https://docs.akoya.com/reference/get-authorization-code
-func (c *Client) GetAuthorizationURL(institutionID, state, redirectURI string) (string, error) {
+// Akoya does not use PKCE, so codeVerifier is always "".
+func (c *Client) GetAuthorizationURL(institutionID, state, redirectURI string) (authURL string, codeVerifier string, err error) {
 	// Akoya uses a flat /auth endpoint with connector as a query param (not Keycloak realm routing)
 	// e.g. https://sandbox-idp.ddp.akoya.com/auth?connector=mikomo&...
 	params := url.Values{}
@@ -140,12 +141,13 @@ func (c *Client) GetAuthorizationURL(institutionID, state, redirectURI string) (
 	params.Set("scope", "openid profile offline_access")
 	params.Set("state", state)
 
-	return c.cfg.BaseURL + "/auth?" + params.Encode(), nil
+	return c.cfg.BaseURL + "/auth?" + params.Encode(), "", nil
 }
 
 // ExchangeCode exchanges an Akoya authorization code for access + ID tokens.
 // Docs: https://docs.akoya.com/reference/get-token
-func (c *Client) ExchangeCode(ctx context.Context, _ /* institutionID */, code, redirectURI string) (*aggregator.ProviderToken, error) {
+// codeVerifier is ignored — Akoya does not use PKCE.
+func (c *Client) ExchangeCode(ctx context.Context, _ /* institutionID */, code, redirectURI, _ /* codeVerifier */ string) (*aggregator.ProviderToken, error) {
 	// Akoya token endpoint is flat — no realm/institution in the path
 	// Discovery confirms only client_secret_basic (Basic Auth) is supported
 	body := url.Values{}
@@ -203,7 +205,9 @@ func (c *Client) ExchangeCode(ctx context.Context, _ /* institutionID */, code, 
 
 // RefreshToken exchanges a refresh token for a new access token.
 // Akoya uses standard OAuth2 refresh_token grant on the same /token endpoint.
-func (c *Client) RefreshToken(ctx context.Context, refreshToken string) (*aggregator.ProviderToken, error) {
+// item is accepted to satisfy the Provider interface but is unused — Akoya has
+// a single global token URL regardless of institution.
+func (c *Client) RefreshToken(ctx context.Context, _ *models.Item, refreshToken string) (*aggregator.ProviderToken, error) {
 	if refreshToken == "" {
 		return nil, aggregator.ErrRefreshNotSupported
 	}

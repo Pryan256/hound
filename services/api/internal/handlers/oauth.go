@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/hound-fi/api/internal/database"
 	"github.com/hound-fi/api/internal/middleware"
 	"go.uber.org/zap"
 )
@@ -56,21 +57,26 @@ func (h *Handler) OAuthInitiate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist the session with a new state token (CSRF protection)
-	state, err := h.db.CreateOAuthSession(r.Context(), appID, linkToken, req.InstitutionID, provider.Name())
-	if err != nil {
-		h.log.Error("failed to create oauth session", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to initiate oauth")
-		return
-	}
+	// Generate a state token first so it can be embedded in the authorization URL
+	// and also stored in the session atomically.
+	state := database.GenerateOAuthState()
 
-	oauthURL, err := provider.GetAuthorizationURL(req.InstitutionID, state, redirectURI)
+	// Build the authorization URL. For PKCE providers (e.g. FDX), this also returns
+	// the code verifier that must be stored alongside the session.
+	oauthURL, codeVerifier, err := provider.GetAuthorizationURL(req.InstitutionID, state, redirectURI)
 	if err != nil {
 		h.log.Error("failed to build oauth url",
 			zap.String("provider", provider.Name()),
 			zap.String("institution", req.InstitutionID),
 			zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "PROVIDER_ERROR", "failed to build authorization URL")
+		return
+	}
+
+	// Persist the session with the state token and PKCE code verifier (empty for non-PKCE providers).
+	if err := h.db.CreateOAuthSession(r.Context(), appID, linkToken, req.InstitutionID, provider.Name(), state, codeVerifier); err != nil {
+		h.log.Error("failed to create oauth session", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to initiate oauth")
 		return
 	}
 
@@ -126,8 +132,10 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		redirectURI = h.cfg.BaseURL() + "/link/oauth/complete"
 	}
 
-	// Exchange code for provider tokens
-	token, err := provider.ExchangeCode(r.Context(), session.InstitutionID, req.Code, redirectURI)
+	// Exchange code for provider tokens.
+	// session.CodeVerifier is the PKCE verifier generated during OAuthInitiate;
+	// it is "" for providers that don't use PKCE and is simply ignored by them.
+	token, err := provider.ExchangeCode(r.Context(), session.InstitutionID, req.Code, redirectURI, session.CodeVerifier)
 	if err != nil {
 		h.log.Error("oauth code exchange failed",
 			zap.String("provider", provider.Name()),

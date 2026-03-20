@@ -82,21 +82,23 @@ func (c *Client) RevokeItem(_ context.Context, _ *models.Item) error { return ni
 
 // GetAuthorizationURL returns the redirectURI pre-loaded with code+state so
 // the Link widget lands directly on the OAuth complete page without visiting a bank.
-func (c *Client) GetAuthorizationURL(_, state, redirectURI string) (string, error) {
-	u, err := url.Parse(redirectURI)
-	if err != nil {
-		return "", fmt.Errorf("sandbox: parse redirect uri: %w", err)
+// codeVerifier is always "" for sandbox (no PKCE needed).
+func (c *Client) GetAuthorizationURL(_, state, redirectURI string) (authURL string, codeVerifier string, err error) {
+	u, parseErr := url.Parse(redirectURI)
+	if parseErr != nil {
+		return "", "", fmt.Errorf("sandbox: parse redirect uri: %w", parseErr)
 	}
 	q := u.Query()
 	q.Set("code", sandboxCode)
 	q.Set("state", state)
 	u.RawQuery = q.Encode()
-	return u.String(), nil
+	return u.String(), "", nil
 }
 
 // ExchangeCode validates the sandbox code and returns a synthetic provider token.
 // The token never expires so the background refresher leaves sandbox items alone.
-func (c *Client) ExchangeCode(_ context.Context, _, code, _ string) (*aggregator.ProviderToken, error) {
+// codeVerifier is ignored by sandbox.
+func (c *Client) ExchangeCode(_ context.Context, _, code, _, _ string) (*aggregator.ProviderToken, error) {
 	if code != sandboxCode {
 		return nil, fmt.Errorf("sandbox: invalid code %q", code)
 	}
@@ -107,7 +109,8 @@ func (c *Client) ExchangeCode(_ context.Context, _, code, _ string) (*aggregator
 }
 
 // RefreshToken is a no-op for sandbox — tokens never expire.
-func (c *Client) RefreshToken(_ context.Context, _ string) (*aggregator.ProviderToken, error) {
+// The item parameter is accepted to satisfy the Provider interface but is unused.
+func (c *Client) RefreshToken(_ context.Context, _ *models.Item, _ string) (*aggregator.ProviderToken, error) {
 	return nil, aggregator.ErrRefreshNotSupported
 }
 
