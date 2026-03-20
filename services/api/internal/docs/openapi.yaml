@@ -1,0 +1,926 @@
+openapi: 3.1.0
+
+info:
+  title: Hound API
+  version: "1.0"
+  description: |
+    Hound is a financial data aggregation API — a drop-in alternative to Plaid.
+    Connect your users' bank accounts and retrieve accounts, transactions,
+    balances, and identity data in a single, consistent schema.
+
+    ## Authentication
+
+    All `/v1` endpoints require a **server-side API key** passed as a Bearer token:
+
+    ```
+    Authorization: Bearer hound_test_<key>
+    ```
+
+    Use `hound_test_` keys during development (sandbox data, 100 req/min).
+    Use `hound_live_` keys in production (real institutions, 1 000 req/min).
+
+    Endpoints that operate on a specific connected institution also require a
+    **Hound-Access-Token** header — the opaque token returned by
+    `/v1/item/public_token/exchange`.
+
+    ## Link flow
+
+    1. Call `POST /v1/link/token/create` from your server to get a `link_token`.
+    2. Open the Hound Link widget with that token — the user selects and
+       authenticates with their institution.
+    3. The widget posts a `public_token` back to your page via `postMessage`.
+    4. Exchange it server-side with `POST /v1/item/public_token/exchange` to
+       get a permanent `access_token`.
+
+    ## Rate limits
+
+    Every response includes rate-limit headers:
+
+    | Header | Description |
+    |--------|-------------|
+    | `X-RateLimit-Limit` | Max requests per minute for this key |
+    | `X-RateLimit-Remaining` | Requests remaining in the current window |
+    | `X-RateLimit-Reset` | Unix timestamp when the window resets |
+
+    When the limit is exceeded the API returns **429** with a `Retry-After`
+    header (seconds until the window resets).
+
+  contact:
+    name: Hound Support
+    url: https://hound.fi
+
+servers:
+  - url: https://api.hound.fi
+    description: Production
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Link
+    description: Create Link tokens and exchange them for access tokens.
+  - name: Item
+    description: Manage connected institution items.
+  - name: Accounts
+    description: Retrieve account data.
+  - name: Transactions
+    description: Retrieve transaction history.
+  - name: Identity
+    description: Retrieve account holder identity.
+  - name: Webhooks
+    description: Register and manage outbound webhook endpoints.
+  - name: Sandbox
+    description: |
+      Test-environment controls. **Only available with `hound_test_` API keys.**
+      Use these endpoints to simulate events without waiting for real data.
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Your Hound API key. Use `hound_test_` keys for development and
+        `hound_live_` keys for production.
+
+  parameters:
+    AccessToken:
+      name: Hound-Access-Token
+      in: header
+      required: true
+      description: >
+        Access token for the connected item, obtained from
+        `/v1/item/public_token/exchange`.
+      schema:
+        type: string
+        example: access-f0602fe0cda4ee73...
+
+  headers:
+    X-RateLimit-Limit:
+      description: Maximum requests per minute for this API key.
+      schema: { type: integer, example: 100 }
+    X-RateLimit-Remaining:
+      description: Requests remaining in the current window.
+      schema: { type: integer, example: 97 }
+    X-RateLimit-Reset:
+      description: Unix timestamp (seconds) when the rate-limit window resets.
+      schema: { type: integer, example: 1735689600 }
+
+  schemas:
+
+    Error:
+      type: object
+      required: [error_code, error_message]
+      properties:
+        error_code:
+          type: string
+          example: INVALID_ACCESS_TOKEN
+        error_message:
+          type: string
+          example: access token is invalid
+
+    Item:
+      type: object
+      required: [id, status, provider, institution_id, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        status:
+          type: string
+          enum: [active, error, pending]
+          example: active
+        provider:
+          type: string
+          example: akoya
+        institution_id:
+          type: string
+          example: mikomo
+        institution_name:
+          type: string
+          example: MikoMo Bank
+        error_message:
+          type: string
+          nullable: true
+          example: null
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Balances:
+      type: object
+      properties:
+        available:
+          type: number
+          format: double
+          nullable: true
+          description: Available balance (may differ from current for credit accounts).
+          example: 1200.00
+        current:
+          type: number
+          format: double
+          nullable: true
+          description: Current (ledger) balance.
+          example: 1842.55
+        limit:
+          type: number
+          format: double
+          nullable: true
+          description: Credit limit (credit accounts only).
+          example: 5000.00
+        currency:
+          type: string
+          example: USD
+
+    Account:
+      type: object
+      required: [id, item_id, name, type]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 7c3b1a2d-1234-4abc-8def-0123456789ab
+        item_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: Platinum Checking
+        official_name:
+          type: string
+          nullable: true
+          example: Chase Total Checking
+        type:
+          type: string
+          enum: [depository, credit, investment, loan, other]
+          example: depository
+        subtype:
+          type: string
+          nullable: true
+          example: checking
+        mask:
+          type: string
+          nullable: true
+          description: Last 4 digits of account number.
+          example: "4242"
+        balances:
+          $ref: '#/components/schemas/Balances'
+        currency:
+          type: string
+          example: USD
+
+    Transaction:
+      type: object
+      required: [id, account_id, amount, date, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          format: double
+          description: >
+            Positive = money leaving the account (debit/purchase).
+            Negative = money entering the account (credit/refund).
+          example: 42.50
+        currency:
+          type: string
+          example: USD
+        date:
+          type: string
+          format: date-time
+          example: "2024-06-15T00:00:00Z"
+        name:
+          type: string
+          description: Raw transaction description from the institution.
+          example: AMAZON.COM*1Z3K9
+        merchant_name:
+          type: string
+          nullable: true
+          description: Cleaned merchant name (enriched).
+          example: Amazon
+        category:
+          type: string
+          nullable: true
+          example: Shopping
+        pending:
+          type: boolean
+          description: True if the transaction has not yet settled.
+          example: false
+        provider_transaction_id:
+          type: string
+          description: Original transaction ID from the data provider.
+
+    Webhook:
+      type: object
+      required: [id, application_id, url, events, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        application_id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+          example: https://example.com/webhooks/hound
+        events:
+          type: array
+          items:
+            type: string
+            enum: [TRANSACTIONS_SYNC, ITEM_ERROR, ITEM_LOGIN_REQUIRED]
+          example: [TRANSACTIONS_SYNC, ITEM_ERROR]
+        created_at:
+          type: string
+          format: date-time
+        secret:
+          type: string
+          description: >
+            HMAC-SHA256 signing secret. **Returned only on creation** — store it
+            securely; it cannot be retrieved again.
+          example: a3f1c2e9b7d40561...
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid API key.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error_code: UNAUTHORIZED
+            error_message: missing authorization header
+
+    BadRequest:
+      description: Invalid request body or parameters.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    RateLimited:
+      description: Rate limit exceeded.
+      headers:
+        Retry-After:
+          description: Seconds until the rate-limit window resets.
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error_code: RATE_LIMIT_EXCEEDED
+            error_message: rate limit of 100 req/min exceeded — retry after 42 seconds
+
+    ProviderError:
+      description: The upstream financial institution returned an error.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error_code: PROVIDER_ERROR
+            error_message: failed to fetch accounts from institution
+
+paths:
+
+  # ── Link ──────────────────────────────────────────────────────────────────
+
+  /v1/link/token/create:
+    post:
+      operationId: createLinkToken
+      summary: Create a Link token
+      description: |
+        Creates a short-lived Link token (30 min TTL) used to initialise the
+        Hound Link widget in your frontend. Call this from your **server** —
+        never expose your API key to the browser.
+      tags: [Link]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id:
+                  type: string
+                  description: Your application's identifier for this user.
+                  example: user_abc123
+                products:
+                  type: array
+                  items:
+                    type: string
+                    enum: [transactions, identity]
+                  description: Data products to request access for.
+                  example: [transactions]
+                redirect_uri:
+                  type: string
+                  format: uri
+                  description: >
+                    Custom OAuth redirect URI. Defaults to the Hound-hosted
+                    completion page if omitted.
+      responses:
+        "200":
+          description: Link token created.
+          headers:
+            X-RateLimit-Limit:     { $ref: '#/components/headers/X-RateLimit-Limit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+            X-RateLimit-Reset:     { $ref: '#/components/headers/X-RateLimit-Reset' }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  link_token:  { type: string, example: link-1a2b3c4d... }
+                  expiration:  { type: string, format: date-time }
+                  request_id:  { type: string }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /v1/item/public_token/exchange:
+    post:
+      operationId: exchangePublicToken
+      summary: Exchange a public token for an access token
+      description: |
+        Exchanges the one-time `public_token` received from the Link widget
+        for a permanent `access_token`. Call this from your **server**
+        immediately after the widget posts the public token.
+
+        The `access_token` grants access to the connected institution's data.
+        Store it securely — treat it like a password.
+      tags: [Link]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [public_token]
+              properties:
+                public_token:
+                  type: string
+                  example: public-5b554abf...
+      responses:
+        "200":
+          description: Token exchanged.
+          headers:
+            X-RateLimit-Limit:     { $ref: '#/components/headers/X-RateLimit-Limit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+            X-RateLimit-Reset:     { $ref: '#/components/headers/X-RateLimit-Reset' }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string, example: access-f0602fe0... }
+                  item_id:      { type: string, format: uuid }
+                  request_id:   { type: string }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  # ── Item ──────────────────────────────────────────────────────────────────
+
+  /v1/item:
+    get:
+      operationId: getItem
+      summary: Get item details
+      description: Returns metadata and status for a connected institution item.
+      tags: [Item]
+      parameters:
+        - $ref: '#/components/parameters/AccessToken'
+      responses:
+        "200":
+          description: Item details.
+          headers:
+            X-RateLimit-Limit:     { $ref: '#/components/headers/X-RateLimit-Limit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+            X-RateLimit-Reset:     { $ref: '#/components/headers/X-RateLimit-Reset' }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item:       { $ref: '#/components/schemas/Item' }
+                  request_id: { type: string }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+    delete:
+      operationId: deleteItem
+      summary: Remove a connected item
+      description: |
+        Disconnects an item, revokes the access token, and deletes all
+        associated accounts and transactions from Hound. This action is
+        irreversible.
+      tags: [Item]
+      parameters:
+        - $ref: '#/components/parameters/AccessToken'
+      responses:
+        "200":
+          description: Item deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:    { type: boolean, example: true }
+                  request_id: { type: string }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /v1/item/relink/token:
+    post:
+      operationId: createRelinkToken
+      summary: Create a re-link token for an errored item
+      description: |
+        When an item enters `error` status (e.g. the user's bank session
+        expired), call this endpoint to get a new Link token pre-seeded with
+        the existing item. Open the Link widget with this token — the user
+        re-authenticates and the item returns to `active` with all historical
+        data intact.
+
+        The item **must** be in `error` status; calling this on an `active`
+        item returns 400.
+      tags: [Item]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [access_token, user_id]
+              properties:
+                access_token:
+                  type: string
+                  example: access-f0602fe0...
+                user_id:
+                  type: string
+                  example: user_abc123
+      responses:
+        "200":
+          description: Re-link token created.
+          headers:
+            X-RateLimit-Limit:     { $ref: '#/components/headers/X-RateLimit-Limit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+            X-RateLimit-Reset:     { $ref: '#/components/headers/X-RateLimit-Reset' }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  link_token:  { type: string, example: link-78c044a0... }
+                  expiration:  { type: string, format: date-time }
+                  request_id:  { type: string }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  # ── Accounts ──────────────────────────────────────────────────────────────
+
+  /v1/accounts:
+    get:
+      operationId: getAccounts
+      summary: Get accounts
+      description: |
+        Returns all accounts for a connected item. Fetches fresh data from
+        the institution and upserts into Hound's database before returning.
+      tags: [Accounts]
+      parameters:
+        - $ref: '#/components/parameters/AccessToken'
+      responses:
+        "200":
+          description: Account list.
+          headers:
+            X-RateLimit-Limit:     { $ref: '#/components/headers/X-RateLimit-Limit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+            X-RateLimit-Reset:     { $ref: '#/components/headers/X-RateLimit-Reset' }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+                  item:       { $ref: '#/components/schemas/Item' }
+                  request_id: { type: string }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+        "502": { $ref: '#/components/responses/ProviderError' }
+
+  /v1/accounts/balance:
+    get:
+      operationId: getAccountBalance
+      summary: Get real-time balances
+      description: |
+        Fetches current and available balances directly from the institution,
+        bypassing any cached data. Use this when you need the freshest possible
+        balance (e.g. before authorising a payment).
+      tags: [Accounts]
+      parameters:
+        - $ref: '#/components/parameters/AccessToken'
+      responses:
+        "200":
+          description: Real-time balances.
+          headers:
+            X-RateLimit-Limit:     { $ref: '#/components/headers/X-RateLimit-Limit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+            X-RateLimit-Reset:     { $ref: '#/components/headers/X-RateLimit-Reset' }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+                  item:       { $ref: '#/components/schemas/Item' }
+                  request_id: { type: string }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+        "502": { $ref: '#/components/responses/ProviderError' }
+
+  # ── Transactions ──────────────────────────────────────────────────────────
+
+  /v1/transactions:
+    get:
+      operationId: getTransactions
+      summary: Get transactions
+      description: |
+        Returns transactions for a connected item using **cursor-based
+        pagination** (keyed on `date DESC, id DESC`).
+
+        **First page:** omit `cursor`. Hound syncs fresh data from the
+        institution, upserts it into the database, then returns the first
+        page from the DB. A `TRANSACTIONS_SYNC` webhook fires if new
+        transactions were written.
+
+        **Subsequent pages:** pass the `next_cursor` value from the previous
+        response. These pages read directly from the DB — no provider call
+        is made.
+
+        **Date filtering** applies to all pages. Defaults to the last 90 days.
+      tags: [Transactions]
+      parameters:
+        - $ref: '#/components/parameters/AccessToken'
+        - name: cursor
+          in: query
+          description: Opaque pagination cursor from a previous response.
+          schema: { type: string }
+        - name: count
+          in: query
+          description: Number of transactions per page (1–500, default 100).
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+        - name: start_date
+          in: query
+          description: Earliest transaction date (YYYY-MM-DD). Defaults to 90 days ago.
+          schema: { type: string, format: date, example: "2024-01-01" }
+        - name: end_date
+          in: query
+          description: Latest transaction date (YYYY-MM-DD). Defaults to today.
+          schema: { type: string, format: date, example: "2024-06-30" }
+      responses:
+        "200":
+          description: Paginated transaction list.
+          headers:
+            X-RateLimit-Limit:     { $ref: '#/components/headers/X-RateLimit-Limit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+            X-RateLimit-Reset:     { $ref: '#/components/headers/X-RateLimit-Reset' }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transactions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Transaction' }
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+                  total_transactions:
+                    type: integer
+                    description: Total transactions in the date window (across all pages).
+                    example: 87
+                  has_more:
+                    type: boolean
+                    description: True if there are more pages available.
+                    example: true
+                  next_cursor:
+                    type: string
+                    description: >
+                      Pass this as `cursor` to fetch the next page.
+                      Empty string on the last page.
+                    example: eyJkIjoiMjAyNC0wNi0xNSIsImkiOiI3YzNiMWEy...
+                  item:       { $ref: '#/components/schemas/Item' }
+                  request_id: { type: string }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+        "502": { $ref: '#/components/responses/ProviderError' }
+
+  # ── Identity ──────────────────────────────────────────────────────────────
+
+  /v1/identity:
+    get:
+      operationId: getIdentity
+      summary: Get account holder identity
+      description: |
+        Returns identity information (name, address, email, phone) for the
+        account holder. Fetched live from the institution — not cached.
+      tags: [Identity]
+      parameters:
+        - $ref: '#/components/parameters/AccessToken'
+      responses:
+        "200":
+          description: Identity data.
+          headers:
+            X-RateLimit-Limit:     { $ref: '#/components/headers/X-RateLimit-Limit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+            X-RateLimit-Reset:     { $ref: '#/components/headers/X-RateLimit-Reset' }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    description: Accounts with identity details attached.
+                    items: { $ref: '#/components/schemas/Account' }
+                  item:       { $ref: '#/components/schemas/Item' }
+                  request_id: { type: string }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+        "502": { $ref: '#/components/responses/ProviderError' }
+
+  # ── Webhooks ──────────────────────────────────────────────────────────────
+
+  /v1/webhooks:
+    post:
+      operationId: registerWebhook
+      summary: Register a webhook endpoint
+      description: |
+        Registers a URL to receive signed webhook events. Hound signs every
+        delivery with HMAC-SHA256:
+
+        ```
+        Hound-Signature: t=<unix_timestamp>,v1=<hmac_hex>
+        ```
+
+        Compute the expected signature as:
+        ```
+        HMAC-SHA256(secret, "<timestamp>.<body>")
+        ```
+
+        The `secret` is returned **only on creation**. Store it securely.
+
+        **Supported events:**
+
+        | Event | Fired when |
+        |-------|-----------|
+        | `TRANSACTIONS_SYNC` | New or updated transactions are available |
+        | `ITEM_ERROR` | A background token refresh failed permanently |
+        | `ITEM_LOGIN_REQUIRED` | The user must re-authenticate |
+      tags: [Webhooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  example: https://example.com/webhooks/hound
+                events:
+                  type: array
+                  items:
+                    type: string
+                    enum: [TRANSACTIONS_SYNC, ITEM_ERROR, ITEM_LOGIN_REQUIRED]
+                  example: [TRANSACTIONS_SYNC, ITEM_ERROR]
+      responses:
+        "201":
+          description: |
+            Webhook registered. **Save the `secret` now — it will not be shown again.**
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Webhook' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+    get:
+      operationId: listWebhooks
+      summary: List registered webhooks
+      tags: [Webhooks]
+      responses:
+        "200":
+          description: Webhook list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhooks:
+                    type: array
+                    items: { $ref: '#/components/schemas/Webhook' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /v1/webhooks/{webhookID}:
+    delete:
+      operationId: deleteWebhook
+      summary: Delete a webhook
+      tags: [Webhooks]
+      parameters:
+        - name: webhookID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Webhook deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: deleted }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  # ── Sandbox ───────────────────────────────────────────────────────────────
+
+  /v1/sandbox/item/fire_webhook:
+    post:
+      operationId: sandboxFireWebhook
+      summary: Manually fire a webhook event
+      description: |
+        Triggers a webhook delivery for the given item without waiting for a
+        real event. Use this to test your webhook handler code.
+
+        **Only available with `hound_test_` API keys.**
+      tags: [Sandbox]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [access_token, webhook_type]
+              properties:
+                access_token:
+                  type: string
+                  example: access-f0602fe0...
+                webhook_type:
+                  type: string
+                  enum: [TRANSACTIONS_SYNC, ITEM_ERROR, ITEM_LOGIN_REQUIRED]
+                  example: TRANSACTIONS_SYNC
+      responses:
+        "200":
+          description: Webhook fired.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  fired:        { type: boolean, example: true }
+                  webhook_type: { type: string }
+                  item_id:      { type: string, format: uuid }
+                  request_id:   { type: string }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403":
+          description: Only available with test-environment API keys.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error_code: SANDBOX_ONLY
+                error_message: sandbox endpoints are only available for test-environment API keys
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /v1/sandbox/item/reset_login:
+    post:
+      operationId: sandboxResetLogin
+      summary: Put an item into login_required error state
+      description: |
+        Simulates an expired user session by setting the item's status to
+        `error` and firing an `ITEM_LOGIN_REQUIRED` webhook. Use this to test
+        your re-link flow end-to-end.
+
+        **Only available with `hound_test_` API keys.**
+      tags: [Sandbox]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [access_token]
+              properties:
+                access_token:
+                  type: string
+                  example: access-f0602fe0...
+      responses:
+        "200":
+          description: Item reset to login_required.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reset:      { type: boolean, example: true }
+                  item_id:    { type: string, format: uuid }
+                  new_status: { type: string, example: error }
+                  request_id: { type: string }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403":
+          description: Only available with test-environment API keys.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  # ── Utility ───────────────────────────────────────────────────────────────
+
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Health check
+      description: Returns 200 if the API is running. No authentication required.
+      security: []
+      tags: []
+      responses:
+        "200":
+          description: API is healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }

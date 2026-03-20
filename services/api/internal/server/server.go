@@ -48,6 +48,10 @@ func New(cfg *config.Config, db *database.DB, agg *aggregator.Router, webhooks *
 	// Prometheus metrics (no auth — restrict at the network/ingress layer in production)
 	r.Get("/metrics", promhttp.Handler().ServeHTTP)
 
+	// API reference docs (no auth)
+	r.Get("/openapi.yaml", h.OpenAPISpec)
+	r.Get("/docs", h.Docs)
+
 	// Static assets — embed script (hound.js) and compiled Link widget
 	// Served from ./static/ on disk (populated by the Docker build stage).
 	staticFS := http.FileServer(http.Dir("./static"))
