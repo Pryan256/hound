@@ -7,7 +7,6 @@
  * Message flow:
  *   /link/oauth/complete  → (postMessage) → /link/widget (this page) → (postMessage) → developer's page
  */
-import React from "react";
 import { createRoot } from "react-dom/client";
 import { HoundLink } from "./components/Link";
 import styles from "./components/Link.module.css";

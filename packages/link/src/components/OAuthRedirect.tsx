@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import styles from "./Link.module.css";
 
 // Deterministic color by first character (same palette as InstitutionSearch)
@@ -125,7 +125,6 @@ export function OAuthRedirect({ institution, linkToken, onComplete, onBack }: Pr
       <button
         className={styles.connectButton}
         onClick={handleConnect}
-        disabled={status !== "idle" && status !== "error"}
       >
         Continue to {institution.name} →
       </button>
