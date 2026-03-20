@@ -125,7 +125,7 @@ export function OAuthRedirect({ institution, linkToken, onComplete, onBack }: Pr
       <button
         className={styles.connectButton}
         onClick={handleConnect}
-        disabled={status === "redirecting"}
+        disabled={status !== "idle" && status !== "error"}
       >
         Continue to {institution.name} →
       </button>

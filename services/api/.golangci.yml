@@ -1,0 +1,26 @@
+run:
+  timeout: 5m
+
+linters:
+  # Start with fast, high-signal linters. staticcheck/unused can be added
+  # once the codebase has baseline lint coverage.
+  enable:
+    - govet        # catches real bugs (shadowing, printf mismatches, etc.)
+    - errcheck     # unchecked error return values
+    - ineffassign  # assignments whose value is never used
+    - typecheck    # required for all other linters
+  disable-all: false
+
+linters-settings:
+  errcheck:
+    # These are intentionally fire-and-forget — callers can't usefully recover.
+    exclude-functions:
+      - (net/http.ResponseWriter).Write
+      - (*go.uber.org/zap.Logger).Sync
+
+issues:
+  exclude-dirs:
+    - vendor
+  exclude-rules:
+    - path: _test\.go
+      linters: [errcheck]
