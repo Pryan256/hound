@@ -151,8 +151,8 @@ func (db *DB) ExchangePublicToken(ctx context.Context, appID uuid.UUID, publicTo
 		return nil, "", fmt.Errorf("create access token: %w", err)
 	}
 
-	// Expire the public token (single use)
-	db.pool.Exec(ctx,
+	// Expire the public token (single use) — error is non-fatal, token has a short TTL anyway.
+	_, _ = db.pool.Exec(ctx,
 		`UPDATE link_sessions SET public_token_expires_at = NOW() WHERE public_token = $1`,
 		publicToken,
 	)
@@ -183,8 +183,8 @@ func (db *DB) DeleteItem(ctx context.Context, itemID uuid.UUID) error {
 		`UPDATE items SET status = 'revoked', updated_at = NOW() WHERE id = $1`,
 		itemID,
 	)
-	// Revoke all access tokens for this item
-	db.pool.Exec(ctx,
+	// Revoke all access tokens for this item — best-effort, non-fatal.
+	_, _ = db.pool.Exec(ctx,
 		`UPDATE access_tokens SET revoked_at = NOW() WHERE item_id = $1`,
 		itemID,
 	)

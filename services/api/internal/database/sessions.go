@@ -59,8 +59,8 @@ func (db *DB) ValidateOAuthState(ctx context.Context, state string) (*OAuthSessi
 
 	_ = linkToken
 
-	// Expire the state immediately (single use)
-	db.pool.Exec(ctx,
+	// Expire the state immediately (single use) — best-effort, non-fatal.
+	_, _ = db.pool.Exec(ctx,
 		`UPDATE link_sessions SET oauth_state_expires_at = NOW() WHERE oauth_state = $1`, state)
 
 	return &s, nil

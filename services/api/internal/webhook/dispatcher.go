@@ -197,7 +197,9 @@ func (d *Dispatcher) deliver(ctx context.Context, deliveryID uuid.UUID) {
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		metrics.WebhookDeliveriesTotal.WithLabelValues("success").Inc()
-		d.db.MarkDelivered(ctx, deliveryID, resp.StatusCode)
+		if err := d.db.MarkDelivered(ctx, deliveryID, resp.StatusCode); err != nil {
+			d.log.Error("webhook: failed to mark delivery as delivered", zap.Error(err))
+		}
 		d.log.Info("webhook: delivered",
 			zap.String("url", rec.WebhookURL),
 			zap.String("event", rec.EventType),

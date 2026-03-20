@@ -13,7 +13,6 @@ Never exposed directly to developers.
 import os
 import json
 import logging
-from typing import Optional
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import anthropic

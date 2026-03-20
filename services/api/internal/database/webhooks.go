@@ -193,7 +193,7 @@ var retryDelays = []time.Duration{
 func (db *DB) ScheduleRetry(ctx context.Context, deliveryID uuid.UUID, httpStatus int, errMsg string) (permFailed bool, err error) {
 	// Read current attempt count
 	var attempts int
-	db.pool.QueryRow(ctx, `SELECT attempts FROM webhook_deliveries WHERE id = $1`, deliveryID).Scan(&attempts)
+	_ = db.pool.QueryRow(ctx, `SELECT attempts FROM webhook_deliveries WHERE id = $1`, deliveryID).Scan(&attempts)
 
 	if attempts >= len(retryDelays) {
 		return true, db.MarkPermFailed(ctx, deliveryID, errMsg)
