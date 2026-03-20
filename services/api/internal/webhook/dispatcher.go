@@ -232,8 +232,8 @@ func (d *Dispatcher) scheduleRetry(ctx context.Context, deliveryID uuid.UUID, st
 // sign computes HMAC-SHA256(secret, "<timestamp>.<body>") and returns hex.
 func sign(secret, timestamp string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(timestamp))
-	mac.Write([]byte("."))
-	mac.Write(body)
+	_, _ = mac.Write([]byte(timestamp))
+	_, _ = mac.Write([]byte("."))
+	_, _ = mac.Write(body)
 	return hex.EncodeToString(mac.Sum(nil))
 }

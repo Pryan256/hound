@@ -209,7 +209,7 @@ var merchants = []merchant{
 func transactions(itemPrefix string, accts []models.Account, start, end time.Time) []models.Transaction {
 	// Seed the PRNG with a hash of the item prefix for determinism.
 	h := fnv.New64a()
-	h.Write([]byte(itemPrefix))
+	_, _ = h.Write([]byte(itemPrefix))
 	rng := rand.New(rand.NewSource(int64(h.Sum64())))
 
 	checkingProvID := accts[0].ProviderAccountID
