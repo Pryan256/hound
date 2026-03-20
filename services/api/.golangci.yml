@@ -17,6 +17,8 @@ linters-settings:
     exclude-functions:
       - (net/http.ResponseWriter).Write
       - (*go.uber.org/zap.Logger).Sync
+      # crypto/rand.Read never returns an error since Go 1.20 (panics instead).
+      - crypto/rand.Read
 
 issues:
   exclude-dirs:
